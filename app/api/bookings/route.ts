@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-bookings/index.js";
 
 export const dynamic = "force-dynamic";
-
-const BOOKINGS_API =
-    "https://pljhhsstag.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-bookings";
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
     try {
@@ -24,63 +23,89 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const response = await fetch(BOOKINGS_API, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(authHeader ? { Authorization: authHeader } : {}),
-            },
-            body: JSON.stringify(body),
-            cache: "no-store",
-        });
+        const response = await handler(event);
 
-        const rawText = await response.text();
+        console.log(
+            "LOCAL BOOKINGS API ACTION:",
+            body.action
+        );
 
-        console.log("BOOKINGS API ACTION:", body.action);
-        console.log("BOOKINGS API STATUS:", response.status);
-        console.log("BOOKINGS API RAW:", rawText);
+        console.log(
+            "LOCAL BOOKINGS API STATUS:",
+            response.statusCode
+        );
 
-        let parsedData: unknown = null;
+        const rawText = response.body || "";
+
+        let parsedData: unknown = {};
 
         try {
-            parsedData = rawText ? JSON.parse(rawText) : {};
+            parsedData = rawText
+                ? JSON.parse(rawText)
+                : {};
         } catch {
             parsedData = {
-                error: rawText || "Bookings API returned an invalid response.",
+                error:
+                    rawText ||
+                    "Bookings API returned an invalid response.",
             };
         }
 
-        if (!response.ok) {
+        if (
+            response.statusCode &&
+            response.statusCode >= 400
+        ) {
             return NextResponse.json(
                 {
                     error:
-                        typeof parsedData === "object" && parsedData !== null
-                            ? "error" in parsedData
-                                ? String((parsedData as { error?: unknown }).error)
-                                : "message" in parsedData
-                                    ? String((parsedData as { message?: unknown }).message)
-                                    : "Bookings API request failed."
+                        typeof parsedData === "object" &&
+                        parsedData !== null &&
+                        "error" in parsedData
+                            ? String(
+                                (
+                                    parsedData as {
+                                        error?: unknown;
+                                    }
+                                ).error
+                            )
                             : "Bookings API request failed.",
+
                     action: body.action,
-                    status: response.status,
+
+                    status: response.statusCode,
+
                     details: parsedData,
                 },
-                { status: response.status }
+                {
+                    status: response.statusCode,
+                }
             );
         }
 
-        return NextResponse.json(parsedData, { status: response.status });
+        return NextResponse.json(
+            parsedData,
+            {
+                status: response.statusCode || 200,
+            }
+        );
     } catch (error: unknown) {
-        console.error("BOOKINGS ROUTE ERROR:", error);
+        console.error(
+            "LOCAL BOOKINGS ROUTE ERROR:",
+            error
+        );
 
         const message =
-            error instanceof Error ? error.message : "Bookings route failed";
+            error instanceof Error
+                ? error.message
+                : "Bookings route failed";
 
         return NextResponse.json(
             {
                 error: message,
             },
-            { status: 500 }
+            {
+                status: 500,
+            }
         );
     }
 }

@@ -1087,13 +1087,11 @@ function generateSlug(storeName) {
  */
 
 const dbConfig = {
-    host: "gateway01.ap-southeast-1.prod.aws.tidbcloud.com",
-    user: "4VMJYNRD5H472NK.root",
-    password: "rH9a9Tj2r7uJpQqf",
+    host: "127.0.0.1",
+    user: "root",
+    password: "BTA5EYVWLfWcebF",
     database: "stocknbook",
-    ssl: {
-        ca: fs.readFileSync('./certs/isrgrootx1.pem')
-    }
+    ssl: { rejectUnauthorized: false },
 };
 
 exports.handler = async (event) => {

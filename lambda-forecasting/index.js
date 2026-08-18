@@ -35,9 +35,9 @@ const {
 const JWT_SECRET = process.env.JWT_SECRET || "stocknbook-secret-key";
 
 const dbConfig = {
-    host: "stocknbook-db.ctc4eeuyq62e.ap-southeast-1.rds.amazonaws.com",
-    user: "admin",
-    password: "2qJivedWDxCQS6TLjjEl",
+    host: "127.0.0.1",
+    user: "root",
+    password: "BTA5EYVWLfWcebF",
     database: "stocknbook",
     ssl: { rejectUnauthorized: false },
     waitForConnections: true,

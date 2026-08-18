@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-auth/index.js";
 
-const LAMBDA_URL =
-    "https://qyjajerkuc.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-auth";
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,48 +17,46 @@ export async function POST(req: NextRequest) {
       action: normalizedAction,
     };
 
-    const response = await fetch(LAMBDA_URL, {
-      method: "POST",
+    const event = {
       headers: {
         "Content-Type": "application/json",
         Authorization:
             req.headers.get("authorization") || "",
       },
       body: JSON.stringify(normalizedBody),
-      cache: "no-store",
-    });
+      requestContext: {
+        http: {
+          method: "POST",
+        },
+      },
+    };
 
-    const text = await response.text();
+    const response = await handler(event);
 
-    let data: unknown;
+    let data: unknown = {};
 
     try {
-      data = text ? JSON.parse(text) : {};
+      data = response.body
+          ? JSON.parse(response.body)
+          : {};
     } catch {
       data = {
-        error:
-            text ||
-            "Invalid response from authentication server",
+        error: response.body || "Invalid server response",
       };
     }
 
-    if (!response.ok) {
-      console.error("Auth Lambda request failed:", {
-        status: response.status,
-        action: normalizedAction,
-        data,
-      });
-    }
-
     return NextResponse.json(data, {
-      status: response.status,
+      status: response.statusCode || 200,
     });
-  } catch (error) {
-    console.error("Auth route error:", error);
+
+  } catch (error: any) {
+    console.error("Local Auth API Error:", error);
 
     return NextResponse.json(
         {
-          error: "Auth server error",
+          error:
+              error?.message ||
+              "Authentication server error",
         },
         {
           status: 500,

@@ -36,17 +36,13 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "*")
     .map((item) => item.trim())
     .filter(Boolean);
 
-const pool = mysql.createPool({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    dateStrings: true,
-});
-
+const dbConfig = {
+    host: "127.0.0.1",
+    user: "root",
+    password: "BTA5EYVWLfWcebF",
+    database: "stocknbook",
+    ssl: { rejectUnauthorized: false },
+};
 function getOrigin(event) {
     const requestOrigin =
         event.headers?.origin ||
