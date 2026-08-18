@@ -1,40 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-categories/index.js";
 
-const CATEGORIES_API =
-    "https://nb9crcrzu2.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-categories";
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
         const authHeader = req.headers.get("authorization");
 
-        const response = await fetch(CATEGORIES_API, {
-            method: "POST",
+        const event = {
             headers: {
                 "Content-Type": "application/json",
-                ...(authHeader ? { Authorization: authHeader } : {}),
+                Authorization: authHeader || "",
             },
             body: JSON.stringify(body),
-            cache: "no-store",
-        });
+            requestContext: {
+                http: {
+                    method: "POST",
+                },
+            },
+        };
 
-        const text = await response.text();
-        let parsed: unknown;
+        const response = await handler(event);
+
+        let parsed: unknown = {};
 
         try {
-            parsed = JSON.parse(text);
+            parsed = response.body ? JSON.parse(response.body) : {};
         } catch {
-            parsed = { error: text || "Non-JSON response from categories upstream" };
+            parsed = {
+                error: response.body || "Invalid server response",
+            };
         }
 
-        return NextResponse.json(parsed, { status: response.status });
+        return NextResponse.json(parsed, {
+            status: response.statusCode || 200,
+        });
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : "Categories route failed";
+        const message =
+            error instanceof Error ? error.message : "Categories route failed";
+
+        console.error("Local Categories API Error:", error);
+
         return NextResponse.json({ error: message }, { status: 500 });
     }
 }
-
-
-
-
-

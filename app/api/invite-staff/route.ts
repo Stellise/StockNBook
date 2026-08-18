@@ -1,44 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-auth/index.js";
 
-const LAMBDA_URL =
-    "https://qyjajerkuc.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-auth";
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const authHeader = req.headers.get("authorization");
 
-        const response = await fetch(LAMBDA_URL, {
-            method: "POST",
+        const event = {
             headers: {
                 "Content-Type": "application/json",
-                Authorization: authHeader || "",
+                Authorization: req.headers.get("authorization") || "",
             },
             body: JSON.stringify(body),
-        });
+            requestContext: {
+                http: {
+                    method: "POST",
+                },
+            },
+        };
 
-        const text = await response.text();
+        const response = await handler(event);
 
-        let data;
+        let data: unknown = {};
 
         try {
-            data = text ? JSON.parse(text) : {};
+            data = response.body ? JSON.parse(response.body) : {};
         } catch {
             data = {
-                error: text || "Invalid response from staff management server",
+                error:
+                    response.body ||
+                    "Invalid response from staff invitation server",
             };
         }
 
         return NextResponse.json(data, {
-            status: response.status,
+            status: response.statusCode || 200,
         });
     } catch (error) {
-        console.error("Staff management route error:", error);
-
+        console.error("Local staff invitation route error:", error);
         return NextResponse.json(
-            { error: "Staff management server error" },
+            { error: "Staff invitation server error" },
             { status: 500 }
         );
     }
 }
-

@@ -1,40 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-products/index.js";
 
-const PRODUCTS_API =
-    "https://wd86z5zg20.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-products"
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
         const authHeader = req.headers.get("authorization");
 
-        const response = await fetch(PRODUCTS_API, {
-            method: "POST",
+        const event = {
             headers: {
                 "Content-Type": "application/json",
-                ...(authHeader ? { Authorization: authHeader } : {}),
+                Authorization: authHeader || "",
             },
             body: JSON.stringify(body),
-            cache: "no-store",
-        });
+            requestContext: {
+                http: {
+                    method: "POST",
+                },
+            },
+        };
 
-        const text = await response.text();
-        let parsed: unknown;
+        const response = await handler(event);
+
+        let parsed: unknown = {};
 
         try {
-            parsed = JSON.parse(text);
+            parsed = response.body ? JSON.parse(response.body) : {};
         } catch {
-            parsed = { error: text || "Non-JSON response from products upstream" };
+            parsed = {
+                error: response.body || "Invalid server response",
+            };
         }
 
-        return NextResponse.json(parsed, { status: response.status });
+        return NextResponse.json(parsed, {
+            status: response.statusCode || 200,
+        });
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : "Products route failed";
+        const message =
+            error instanceof Error ? error.message : "Products route failed";
+
+        console.error("Local Products API Error:", error);
+
         return NextResponse.json({ error: message }, { status: 500 });
     }
 }
-
-
-
-
-

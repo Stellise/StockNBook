@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import mysql, { type Connection } from "mysql2/promise";
 import jwt from "jsonwebtoken";
+import { handler as forecastingHandler } from "../../../lambda-forecasting/index.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-const FORECASTING_LAMBDA_URL =
-    process.env.FORECASTING_LAMBDA_URL ||
-    "https://7oxhafersb.execute-api.ap-southeast-1.amazonaws.com/stocknbook-forecasting";
 
 type Role = "owner" | "manager" | "staff";
 type TokenPayload = jwt.JwtPayload & {
@@ -101,25 +98,12 @@ function resolveDateRange(searchParams: URLSearchParams): DateRange | null {
 }
 
 function databaseConfig() {
-    const required = ["DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME"];
-    const missing = required.filter((key) => !asText(process.env[key]));
-
-    if (missing.length > 0) {
-        throw new Error(
-            `Missing database environment variable(s): ${missing.join(", ")}.`
-        );
-    }
-
     return {
-        host: process.env.DB_HOST,
-        user: process.env.DB_USER,
-        password: process.env.DB_PASSWORD,
-        database: process.env.DB_NAME,
-        port: Number(process.env.DB_PORT || 3306),
-        ssl:
-            String(process.env.DB_SSL || "").toLowerCase() === "true"
-                ? { rejectUnauthorized: false }
-                : undefined,
+        host: "127.0.0.1",
+        user: "root",
+        password: "020820@Steph",
+        database: "stocknbook",
+        port: 3306,
     };
 }
 
@@ -167,7 +151,7 @@ async function ensureBranchBelongsToStore(
         `SELECT id, branch_name
          FROM branches
          WHERE id = ? AND store_id = ?
-         LIMIT 1`,
+             LIMIT 1`,
         [branchId, storeId]
     );
 
@@ -233,10 +217,10 @@ async function loadInventory(
             pv.original_price AS variant_original_price,
             pv.sales_price AS variant_sales_price
         FROM products p
-        LEFT JOIN branches br
-            ON br.id = p.branch_id AND br.store_id = p.store_id
-        LEFT JOIN product_variants pv
-            ON pv.product_id = p.id
+                 LEFT JOIN branches br
+                           ON br.id = p.branch_id AND br.store_id = p.store_id
+                 LEFT JOIN product_variants pv
+                           ON pv.product_id = p.id
         WHERE p.store_id = ?
     `;
 
@@ -341,6 +325,92 @@ async function loadInventory(
     });
 }
 
+
+async function ensureRestockHistoryTable(connection: Connection) {
+    await connection.execute(`
+        CREATE TABLE IF NOT EXISTS restock_history (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            store_id BIGINT NOT NULL,
+            branch_id BIGINT NOT NULL,
+            product_id BIGINT NOT NULL,
+            product_name VARCHAR(255) NOT NULL,
+            variant_name VARCHAR(255) NULL,
+            stock_before INT NOT NULL DEFAULT 0,
+            quantity_added INT NOT NULL DEFAULT 0,
+            current_stock INT NOT NULL DEFAULT 0,
+            received_by VARCHAR(255) NULL,
+            notes VARCHAR(500) NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            INDEX idx_restock_store (store_id),
+            INDEX idx_restock_branch (branch_id),
+            INDEX idx_restock_product (product_id),
+            INDEX idx_restock_created_at (created_at)
+        )
+    `);
+}
+
+async function loadRestockHistory(
+    connection: Connection,
+    storeId: number,
+    branchId: number | null,
+    range: DateRange
+) {
+    await ensureRestockHistoryTable(connection);
+
+    let query = `
+        SELECT
+            rh.id,
+            rh.branch_id,
+            rh.product_name,
+            rh.variant_name,
+            rh.stock_before,
+            rh.quantity_added,
+            rh.current_stock,
+            rh.received_by,
+            rh.notes,
+            DATE_FORMAT(rh.created_at, '%Y-%m-%d') AS restock_date,
+            br.branch_name
+        FROM restock_history rh
+        LEFT JOIN branches br
+            ON br.id = rh.branch_id
+           AND br.store_id = rh.store_id
+        WHERE rh.store_id = ?
+          AND DATE(rh.created_at) BETWEEN ? AND ?
+    `;
+
+    const params: Array<number | string> = [
+        storeId,
+        range.startDate,
+        range.endDate,
+    ];
+
+    if (branchId) {
+        query += " AND rh.branch_id = ?";
+        params.push(branchId);
+    }
+
+    query += " ORDER BY rh.created_at DESC, rh.id DESC";
+
+    const [rows] = await connection.execute(query, params);
+
+    return (rows as Array<Record<string, unknown>>).map((row) => ({
+        id: String(row.id),
+        reference: `RST-${String(row.id).padStart(6, "0")}`,
+        date: asText(row.restock_date),
+        product: asText(row.product_name) || "Unnamed Product",
+        variantName: asText(row.variant_name) || undefined,
+        branch:
+            asText(row.branch_name) ||
+            (row.branch_id ? `Branch ${row.branch_id}` : "Unassigned Branch"),
+        quantityAdded: asNumber(row.quantity_added),
+        currentStock: asNumber(row.current_stock),
+        stockBefore: asNumber(row.stock_before),
+        receivedBy: asText(row.received_by) || "Not recorded",
+        notes: asText(row.notes) || undefined,
+    }));
+}
+
 async function loadSales(
     connection: Connection,
     storeId: number,
@@ -357,18 +427,18 @@ async function loadSales(
             COALESCE(o.total, 0) AS total,
             COALESCE(SUM(oi.quantity), 0) AS total_quantity,
             GROUP_CONCAT(
-                CONCAT(
-                    COALESCE(oi.product_name, 'Product'),
-                    ' × ',
-                    COALESCE(oi.quantity, 0)
-                )
-                ORDER BY oi.id SEPARATOR ', '
+                    CONCAT(
+                            COALESCE(oi.product_name, 'Product'),
+                            ' × ',
+                            COALESCE(oi.quantity, 0)
+                    )
+                        ORDER BY oi.id SEPARATOR ', '
             ) AS items_text
         FROM orders o
-        LEFT JOIN branches br
-            ON br.id = o.branch_id AND br.store_id = o.store_id
-        LEFT JOIN order_items oi
-            ON oi.order_id = o.order_id
+                 LEFT JOIN branches br
+                           ON br.id = o.branch_id AND br.store_id = o.store_id
+                 LEFT JOIN order_items oi
+                           ON oi.order_id = o.order_id
         WHERE o.store_id = ?
           AND o.order_date BETWEEN ? AND ?
     `;
@@ -535,8 +605,7 @@ async function loadForecastReport(
     branchId: number | null
 ) {
     try {
-        const response = await fetch(FORECASTING_LAMBDA_URL, {
-            method: "POST",
+        const event = {
             headers: {
                 "Content-Type": "application/json",
                 Authorization: authHeader,
@@ -545,14 +614,29 @@ async function loadForecastReport(
                 action: "get_inventory_forecast",
                 ...(branchId ? { branch_id: branchId } : {}),
             }),
-            cache: "no-store",
-        });
+            requestContext: {
+                http: {
+                    method: "POST",
+                },
+            },
+        };
 
-        if (!response.ok) {
+        const response = await forecastingHandler(event);
+
+        if ((response.statusCode || 200) < 200 || (response.statusCode || 200) >= 300) {
             return { forecasting: [], seasonalInsights: [] };
         }
 
-        const payload = (await response.json()) as Record<string, unknown>;
+        let payload: Record<string, unknown> = {};
+
+        try {
+            payload = response.body
+                ? (JSON.parse(response.body) as Record<string, unknown>)
+                : {};
+        } catch {
+            return { forecasting: [], seasonalInsights: [] };
+        }
+
         const items = Array.isArray(payload.items) ? payload.items : [];
 
         const forecasting = items.slice(0, 40).map((value, index) => {
@@ -598,7 +682,7 @@ async function loadForecastReport(
 
         return { forecasting, seasonalInsights };
     } catch {
-        // Keep the Reports route usable even when the Forecasting Lambda is unavailable.
+        // Keep the Reports route usable even when local forecasting is unavailable.
         return { forecasting: [], seasonalInsights: [] };
     }
 }
@@ -655,14 +739,21 @@ export async function GET(request: NextRequest) {
             branchId = requestedBranchId;
         }
 
-        const [branches, inventoryList, salesList, bookingList, forecastReport] =
-            await Promise.all([
-                loadBranches(connection, storeId, branchId),
-                loadInventory(connection, storeId, branchId),
-                loadSales(connection, storeId, branchId, range),
-                loadBookings(connection, storeId, branchId, range),
-                loadForecastReport(authHeader, branchId),
-            ]);
+        const [
+            branches,
+            inventoryList,
+            salesList,
+            bookingList,
+            restockHistory,
+            forecastReport,
+        ] = await Promise.all([
+            loadBranches(connection, storeId, branchId),
+            loadInventory(connection, storeId, branchId),
+            loadSales(connection, storeId, branchId, range),
+            loadBookings(connection, storeId, branchId, range),
+            loadRestockHistory(connection, storeId, branchId, range),
+            loadForecastReport(authHeader, branchId),
+        ]);
 
         const totalSales = salesList.reduce(
             (sum, sale) => sum + asNumber(sale.amount),
@@ -712,9 +803,7 @@ export async function GET(request: NextRequest) {
                 inventoryList,
                 lowStockItems,
                 outOfStockItems,
-                // StockNBook has no persisted restock/audit table in the current schema.
-                // Empty arrays are intentional: the UI must not show invented records.
-                restockHistory: [],
+                restockHistory,
                 salesList,
                 bookingList,
                 forecasting: forecastReport.forecasting,

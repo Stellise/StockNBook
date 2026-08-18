@@ -23,26 +23,30 @@ export async function POST(req: NextRequest) {
             );
         }
 
+        const event = {
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: authHeader || "",
+            },
+            body: JSON.stringify(body),
+            httpMethod: "POST",
+            requestContext: {
+                http: {
+                    method: "POST",
+                },
+            },
+        };
+
         const response = await handler(event);
 
-        console.log(
-            "LOCAL BOOKINGS API ACTION:",
-            body.action
-        );
-
-        console.log(
-            "LOCAL BOOKINGS API STATUS:",
-            response.statusCode
-        );
+        console.log("LOCAL BOOKINGS API ACTION:", body.action);
+        console.log("LOCAL BOOKINGS API STATUS:", response.statusCode);
 
         const rawText = response.body || "";
-
         let parsedData: unknown = {};
 
         try {
-            parsedData = rawText
-                ? JSON.parse(rawText)
-                : {};
+            parsedData = rawText ? JSON.parse(rawText) : {};
         } catch {
             parsedData = {
                 error:
@@ -51,10 +55,7 @@ export async function POST(req: NextRequest) {
             };
         }
 
-        if (
-            response.statusCode &&
-            response.statusCode >= 400
-        ) {
+        if (response.statusCode && response.statusCode >= 400) {
             return NextResponse.json(
                 {
                     error:
@@ -69,11 +70,8 @@ export async function POST(req: NextRequest) {
                                 ).error
                             )
                             : "Bookings API request failed.",
-
                     action: body.action,
-
                     status: response.statusCode,
-
                     details: parsedData,
                 },
                 {
@@ -82,17 +80,11 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        return NextResponse.json(
-            parsedData,
-            {
-                status: response.statusCode || 200,
-            }
-        );
+        return NextResponse.json(parsedData, {
+            status: response.statusCode || 200,
+        });
     } catch (error: unknown) {
-        console.error(
-            "LOCAL BOOKINGS ROUTE ERROR:",
-            error
-        );
+        console.error("LOCAL BOOKINGS ROUTE ERROR:", error);
 
         const message =
             error instanceof Error

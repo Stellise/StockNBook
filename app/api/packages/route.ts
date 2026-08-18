@@ -1,18 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-packages/index.js";
 
-const LAMBDA_URL =
-    "https://vn4vtuujbl.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-packages";
+export const runtime = "nodejs";
 
-async function readLambdaResponse(response: Response) {
-    const text = await response.text();
+async function callLocalPackagesLambda(
+    body: Record<string, unknown>,
+    authHeader: string
+) {
+    const event = {
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: authHeader,
+        },
+        body: JSON.stringify(body),
+        requestContext: {
+            http: {
+                method: "POST",
+            },
+        },
+    };
+
+    const response = await handler(event);
+
+    let data: unknown = {};
 
     try {
-        return text ? JSON.parse(text) : {};
+        data = response.body ? JSON.parse(response.body) : {};
     } catch {
-        return {
-            error: text || "Invalid response from server.",
+        data = {
+            error: response.body || "Invalid response from local packages server.",
         };
     }
+
+    return {
+        data,
+        status: response.statusCode || 200,
+    };
 }
 
 export async function POST(req: NextRequest) {
@@ -37,22 +60,12 @@ export async function POST(req: NextRequest) {
         console.log("PACKAGES ROUTE ACTION:", body.action);
         console.log("PACKAGES ROUTE BODY:", body);
 
-        const response = await fetch(LAMBDA_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(authHeader ? { Authorization: authHeader } : {}),
-            },
-            body: JSON.stringify(body),
-            cache: "no-store",
-        });
+        const response = await callLocalPackagesLambda(body, authHeader);
 
-        const data = await readLambdaResponse(response);
+        console.log("PACKAGES LOCAL LAMBDA STATUS:", response.status);
+        console.log("PACKAGES LOCAL LAMBDA RESPONSE:", response.data);
 
-        console.log("PACKAGES LAMBDA STATUS:", response.status);
-        console.log("PACKAGES LAMBDA RESPONSE:", data);
-
-        return NextResponse.json(data, { status: response.status });
+        return NextResponse.json(response.data, { status: response.status });
     } catch (error) {
         console.error("PACKAGES ROUTE ERROR:", error);
 
@@ -79,22 +92,12 @@ export async function GET(req: NextRequest) {
 
         console.log("PACKAGES GET BODY:", body);
 
-        const response = await fetch(LAMBDA_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(authHeader ? { Authorization: authHeader } : {}),
-            },
-            body: JSON.stringify(body),
-            cache: "no-store",
-        });
+        const response = await callLocalPackagesLambda(body, authHeader);
 
-        const data = await readLambdaResponse(response);
+        console.log("PACKAGES GET LOCAL LAMBDA STATUS:", response.status);
+        console.log("PACKAGES GET LOCAL LAMBDA RESPONSE:", response.data);
 
-        console.log("PACKAGES GET LAMBDA STATUS:", response.status);
-        console.log("PACKAGES GET LAMBDA RESPONSE:", data);
-
-        return NextResponse.json(data, { status: response.status });
+        return NextResponse.json(response.data, { status: response.status });
     } catch (error) {
         console.error("PACKAGES GET ROUTE ERROR:", error);
 

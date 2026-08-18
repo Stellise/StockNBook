@@ -1,38 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-auth/index.js";
 
-const LAMBDA_URL =
-    "https://qyjajerkuc.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-auth";
+export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
     try {
-        const authHeader = req.headers.get("authorization");
-
-        const response = await fetch(LAMBDA_URL, {
-            method: "POST",
+        const event = {
             headers: {
                 "Content-Type": "application/json",
-                Authorization: authHeader || "",
+                Authorization: req.headers.get("authorization") || "",
             },
             body: JSON.stringify({
                 action: "get_current_user",
             }),
-            cache: "no-store",
-        });
+            requestContext: {
+                http: {
+                    method: "POST",
+                },
+            },
+        };
 
-        const text = await response.text();
+        const response = await handler(event);
 
-        let data;
+        let data: unknown = {};
 
         try {
-            data = text ? JSON.parse(text) : {};
+            data = response.body ? JSON.parse(response.body) : {};
         } catch {
-            data = { error: text || "Invalid response from current user server" };
+            data = {
+                error:
+                    response.body ||
+                    "Invalid response from current user server",
+            };
         }
 
         return NextResponse.json(data, {
-            status: response.status,
+            status: response.statusCode || 200,
         });
-    } catch {
+    } catch (error) {
+        console.error("Local current user route error:", error);
         return NextResponse.json(
             { error: "Current user server error" },
             { status: 500 }

@@ -1,43 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handler } from "../../../lambda-auth/index.js";
 
-const LAMBDA_URL =
-    "https://qyjajerkuc.execute-api.ap-southeast-1.amazonaws.com/default/stocknbook-auth";
+export const runtime = "nodejs";
 
-async function callLambda(req: NextRequest, action: string, body: object = {}) {
-    const authHeader = req.headers.get("authorization");
-
-    const response = await fetch(LAMBDA_URL, {
-        method: "POST",
+async function callLocalAuth(
+    req: NextRequest,
+    action: string,
+    body: Record<string, unknown> = {}
+) {
+    const event = {
         headers: {
             "Content-Type": "application/json",
-            Authorization: authHeader || "",
+            Authorization: req.headers.get("authorization") || "",
         },
         body: JSON.stringify({
             action,
             ...body,
         }),
-        cache: "no-store",
-    });
+        requestContext: {
+            http: {
+                method: "POST",
+            },
+        },
+    };
 
-    const text = await response.text();
+    const response = await handler(event);
 
-    let data;
+    let data: unknown = {};
 
     try {
-        data = text ? JSON.parse(text) : {};
+        data = response.body ? JSON.parse(response.body) : {};
     } catch {
-        data = { error: text || "Invalid response from branches server" };
+        data = {
+            error: response.body || "Invalid response from branches server",
+        };
     }
 
     return NextResponse.json(data, {
-        status: response.status,
+        status: response.statusCode || 200,
     });
 }
 
 export async function GET(req: NextRequest) {
     try {
-        return await callLambda(req, "get_branches");
-    } catch {
+        return await callLocalAuth(req, "get_branches");
+    } catch (error) {
+        console.error("Local branches route error:", error);
         return NextResponse.json(
             { error: "Branches server error" },
             { status: 500 }
@@ -45,17 +53,17 @@ export async function GET(req: NextRequest) {
     }
 }
 
-
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
 
-        return await callLambda(req, "save_onboarding", {
+        return await callLocalAuth(req, "save_onboarding", {
             ...body,
             send_invitation_emails:
                 body.send_invitation_emails === true,
         });
-    } catch {
+    } catch (error) {
+        console.error("Local create branch route error:", error);
         return NextResponse.json(
             { error: "Create branch server error" },
             { status: 500 }
@@ -66,8 +74,9 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
     try {
         const body = await req.json();
-        return await callLambda(req, "update_branch", body);
-    } catch {
+        return await callLocalAuth(req, "update_branch", body);
+    } catch (error) {
+        console.error("Local update branch route error:", error);
         return NextResponse.json(
             { error: "Update branch server error" },
             { status: 500 }
@@ -78,8 +87,9 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
     try {
         const body = await req.json();
-        return await callLambda(req, "delete_branch", body);
-    } catch {
+        return await callLocalAuth(req, "delete_branch", body);
+    } catch (error) {
+        console.error("Local delete branch route error:", error);
         return NextResponse.json(
             { error: "Delete branch server error" },
             { status: 500 }

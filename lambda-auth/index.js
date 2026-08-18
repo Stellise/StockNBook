@@ -1089,7 +1089,7 @@ function generateSlug(storeName) {
 const dbConfig = {
     host: "127.0.0.1",
     user: "root",
-    password: "BTA5EYVWLfWcebF",
+    password: "020820@Steph",
     database: "stocknbook",
     ssl: { rejectUnauthorized: false },
 };
@@ -3139,7 +3139,7 @@ exports.handler = async (event) => {
                      status,
                      permissions,
                      invite_token,
-                     created_at
+                     NULL AS created_at
                  FROM staff
                  WHERE store_id = ?
                    AND branch_id = ?
@@ -3268,7 +3268,7 @@ exports.handler = async (event) => {
                        AND store_id = ?
                        AND branch_id = ?
                        AND status = 'active'
-                     LIMIT 1`,
+                         LIMIT 1`,
                     [managerId, storeId, branchId]
                 );
 

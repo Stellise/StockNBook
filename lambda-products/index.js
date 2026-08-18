@@ -8,7 +8,7 @@ const JWT_SECRET = "stocknbook-secret-key";
 const dbConfig = {
     host: "127.0.0.1",
     user: "root",
-    password: "BTA5EYVWLfWcebF",
+    password: "020820@Steph",
     database: "stocknbook",
     ssl: { rejectUnauthorized: false },
 };
@@ -473,6 +473,237 @@ async function findExistingProductByName(
     );
 }
 
+
+async function ensureRestockHistoryTable(connection) {
+    await connection.execute(`
+        CREATE TABLE IF NOT EXISTS restock_history (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            store_id BIGINT NOT NULL,
+            branch_id BIGINT NOT NULL,
+            product_id BIGINT NOT NULL,
+            product_name VARCHAR(255) NOT NULL,
+            variant_name VARCHAR(255) NULL,
+            stock_before INT NOT NULL DEFAULT 0,
+            quantity_added INT NOT NULL DEFAULT 0,
+            current_stock INT NOT NULL DEFAULT 0,
+            received_by VARCHAR(255) NULL,
+            notes VARCHAR(500) NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            INDEX idx_restock_store (store_id),
+            INDEX idx_restock_branch (branch_id),
+            INDEX idx_restock_product (product_id),
+            INDEX idx_restock_created_at (created_at)
+        )
+    `);
+}
+
+async function getRestockReceivedBy(
+    connection,
+    decoded,
+    tokenRole,
+    storeId
+) {
+    try {
+        if (tokenRole === "manager" && decoded?.manager_id) {
+            const [rows] = await connection.execute(
+                `SELECT manager_name
+                 FROM managers
+                 WHERE id = ?
+                   AND store_id = ?
+                     LIMIT 1`,
+                [Number(decoded.manager_id), storeId]
+            );
+
+            if (rows.length > 0) {
+                return (
+                    toSafeString(rows[0].manager_name, 255) ||
+                    toSafeString(decoded.email, 255) ||
+                    "Manager"
+                );
+            }
+        }
+
+        if (tokenRole === "staff" && decoded?.staff_id) {
+            const [rows] = await connection.execute(
+                `SELECT staff_name
+                 FROM staff
+                 WHERE id = ?
+                   AND store_id = ?
+                     LIMIT 1`,
+                [Number(decoded.staff_id), storeId]
+            );
+
+            if (rows.length > 0) {
+                return (
+                    toSafeString(rows[0].staff_name, 255) ||
+                    toSafeString(decoded.email, 255) ||
+                    "Staff"
+                );
+            }
+        }
+
+        if (tokenRole === "owner") {
+            const [rows] = await connection.execute(
+                `SELECT owner_name
+                 FROM stores
+                 WHERE id = ?
+                     LIMIT 1`,
+                [storeId]
+            );
+
+            if (rows.length > 0) {
+                return (
+                    toSafeString(rows[0].owner_name, 255) ||
+                    toSafeString(decoded?.email, 255) ||
+                    "Owner"
+                );
+            }
+        }
+    } catch (error) {
+        console.error("Unable to resolve restock receiver:", error);
+    }
+
+    return (
+        toSafeString(decoded?.email, 255) ||
+        toSafeString(tokenRole, 80) ||
+        "User"
+    );
+}
+
+async function recordRestockHistory(
+    connection,
+    {
+        storeId,
+        branchId,
+        beforeProduct,
+        afterProduct,
+        receivedBy,
+    }
+) {
+    if (!beforeProduct || !afterProduct || !branchId) {
+        return;
+    }
+
+    const beforeVariants = Array.isArray(beforeProduct.variants)
+        ? beforeProduct.variants
+        : [];
+
+    const afterVariants = Array.isArray(afterProduct.variants)
+        ? afterProduct.variants
+        : [];
+
+    const beforeHasVariants =
+        Boolean(beforeProduct.hasVariants) || beforeVariants.length > 0;
+
+    const afterHasVariants =
+        Boolean(afterProduct.hasVariants) || afterVariants.length > 0;
+
+    if (beforeHasVariants !== afterHasVariants) {
+        return;
+    }
+
+    await ensureRestockHistoryTable(connection);
+
+    if (!afterHasVariants) {
+        const stockBefore = Number(beforeProduct.stock || 0);
+        const currentStock = Number(afterProduct.stock || 0);
+        const quantityAdded = currentStock - stockBefore;
+
+        if (quantityAdded <= 0) {
+            return;
+        }
+
+        await connection.execute(
+            `INSERT INTO restock_history
+             (
+                 store_id,
+                 branch_id,
+                 product_id,
+                 product_name,
+                 variant_name,
+                 stock_before,
+                 quantity_added,
+                 current_stock,
+                 received_by
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                storeId,
+                branchId,
+                Number(afterProduct.id),
+                toSafeString(afterProduct.name || beforeProduct.name, 255),
+                null,
+                stockBefore,
+                quantityAdded,
+                currentStock,
+                receivedBy,
+            ]
+        );
+
+        return;
+    }
+
+    const previousVariants = new Map();
+
+    for (const variant of beforeVariants) {
+        const signature = getVariantSignature(
+            variant.variantValues || {}
+        );
+
+        if (!signature) {
+            continue;
+        }
+
+        previousVariants.set(signature, Number(variant.stock || 0));
+    }
+
+    for (const variant of afterVariants) {
+        const signature = getVariantSignature(
+            variant.variantValues || {}
+        );
+
+        if (!signature || !previousVariants.has(signature)) {
+            continue;
+        }
+
+        const stockBefore = Number(previousVariants.get(signature) || 0);
+        const currentStock = Number(variant.stock || 0);
+        const quantityAdded = currentStock - stockBefore;
+
+        if (quantityAdded <= 0) {
+            continue;
+        }
+
+        await connection.execute(
+            `INSERT INTO restock_history
+             (
+                 store_id,
+                 branch_id,
+                 product_id,
+                 product_name,
+                 variant_name,
+                 stock_before,
+                 quantity_added,
+                 current_stock,
+                 received_by
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                storeId,
+                branchId,
+                Number(afterProduct.id),
+                toSafeString(afterProduct.name || beforeProduct.name, 255),
+                getVariantDisplayName(variant.variantValues),
+                stockBefore,
+                quantityAdded,
+                currentStock,
+                receivedBy,
+            ]
+        );
+    }
+}
+
 exports.handler = async (event) => {
     const headers = {
         "Access-Control-Allow-Origin": "*",
@@ -836,14 +1067,32 @@ exports.handler = async (event) => {
                 await insertProductVariants(connection, id, incomingVariants);
             }
 
-            await connection.commit();
-
             const product = await getProductById(
                 connection,
                 storeId,
                 activeBranchId,
                 id
             );
+
+            const receivedBy = await getRestockReceivedBy(
+                connection,
+                decoded,
+                tokenRole,
+                storeId
+            );
+
+            await recordRestockHistory(
+                connection,
+                {
+                    storeId,
+                    branchId: activeBranchId,
+                    beforeProduct: existing,
+                    afterProduct: product,
+                    receivedBy,
+                }
+            );
+
+            await connection.commit();
 
             return jsonResponse(200, headers, {
                 success: true,
