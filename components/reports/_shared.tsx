@@ -177,6 +177,13 @@ type BookingRecord = {
 
 type RevenueSource = "pos" | "booking";
 
+type SaleLineItem = {
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+};
+
 type SaleRecord = {
     id: string;
     reference: string;
@@ -186,6 +193,7 @@ type SaleRecord = {
     customer: string;
     product: string;
     itemsText?: string;
+    lineItems: SaleLineItem[];
     category: string;
     quantity: number;
     amount: number;
@@ -357,8 +365,22 @@ const REPORT_CARDS: ReportCard[] = [
     },
 ];
 
+function getManilaDateValue(value: Date) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(value);
+
+    const readPart = (type: Intl.DateTimeFormatPartTypes) =>
+        parts.find((part) => part.type === type)?.value || "";
+
+    return `${readPart("year")}-${readPart("month")}-${readPart("day")}`;
+}
+
 function getToday() {
-    return new Date().toISOString().slice(0, 10);
+    return getManilaDateValue(new Date());
 }
 
 function getMonthStart(date: string) {
@@ -379,13 +401,20 @@ function formatNumber(value: number) {
 }
 
 function formatDate(value: string) {
-    if (!value) return "—";
+    const normalizedDate = toReportDateValue(value);
+
+    if (!normalizedDate) return "—";
+
+    const parsedDate = new Date(`${normalizedDate}T12:00:00`);
+
+    if (Number.isNaN(parsedDate.getTime())) return "—";
 
     return new Intl.DateTimeFormat("en-PH", {
         month: "short",
         day: "numeric",
         year: "numeric",
-    }).format(new Date(`${value}T12:00:00`));
+        timeZone: "Asia/Manila",
+    }).format(parsedDate);
 }
 
 function formatDateRange(startDate: string, endDate: string) {
@@ -810,23 +839,27 @@ function toReportDateValue(value: unknown) {
         return "";
     }
 
-    const directMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    // A true DATE value should be kept exactly as stored in MySQL.
+    // Do not treat a full ISO timestamp the same way: mysql2 can serialize
+    // DATE values as the previous UTC day (for example, Aug 18 Manila can
+    // arrive as 2026-08-17T16:00:00.000Z). Full timestamps must therefore
+    // be converted back to the store timezone before taking the date.
+    const dateOnlyMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 
-    if (directMatch) {
-        return `${directMatch[1]}-${directMatch[2]}-${directMatch[3]}`;
+    if (dateOnlyMatch) {
+        return `${dateOnlyMatch[1]}-${dateOnlyMatch[2]}-${dateOnlyMatch[3]}`;
     }
 
     const parsed = new Date(text);
 
     if (Number.isNaN(parsed.getTime())) {
-        return "";
+        const leadingDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return leadingDate
+            ? `${leadingDate[1]}-${leadingDate[2]}-${leadingDate[3]}`
+            : "";
     }
 
-    const year = parsed.getFullYear();
-    const month = String(parsed.getMonth() + 1).padStart(2, "0");
-    const day = String(parsed.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
+    return getManilaDateValue(parsed);
 }
 
 function isDateInSelectedRange(
@@ -839,6 +872,64 @@ function isDateInSelectedRange(
         (!startDate || dateValue >= startDate) &&
         (!endDate || dateValue <= endDate)
     );
+}
+
+function getLiveOrderLineItems(raw: LiveApiRecord): SaleLineItem[] {
+    const rawItems = Array.isArray(raw.orderItems)
+        ? raw.orderItems
+        : Array.isArray(raw.order_items)
+            ? raw.order_items
+            : Array.isArray(raw.items)
+                ? raw.items
+                : [];
+
+    return rawItems
+        .map((rawItem) => {
+            const item = asLiveRecord(rawItem);
+            const name =
+                asLiveText(
+                    item.name,
+                    item.itemName,
+                    item.item_name,
+                    item.productName,
+                    item.product_name
+                ) || "Item";
+            const quantity = Math.max(
+                0,
+                asLiveNumber(item.quantity ?? item.qty)
+            );
+            const unitPrice = Math.max(
+                0,
+                asLiveNumber(
+                    item.unitPrice ??
+                    item.unit_price ??
+                    item.price ??
+                    item.salesPrice ??
+                    item.sales_price
+                )
+            );
+            const explicitLineTotal = Math.max(
+                0,
+                asLiveNumber(
+                    item.lineTotal ??
+                    item.line_total ??
+                    item.subtotal ??
+                    item.total
+                )
+            );
+            const lineTotal =
+                explicitLineTotal > 0
+                    ? explicitLineTotal
+                    : unitPrice * quantity;
+
+            return {
+                name,
+                quantity,
+                unitPrice,
+                lineTotal,
+            };
+        })
+        .filter((item) => item.name && item.quantity > 0);
 }
 
 function getLiveOrderItemsText(raw: LiveApiRecord) {
@@ -907,8 +998,13 @@ function normalizeLivePosOrder(
         ]
             .map((value) => toReportDateValue(value))
             .find(Boolean) || "";
+    const lineItems = getLiveOrderLineItems(raw);
     const itemText = getLiveOrderItemsText(raw);
     const revenueSource = getOrderRevenueSource(raw, orderId);
+    const structuredQuantity = sumBy(
+        lineItems,
+        (item) => item.quantity
+    );
 
     return {
         id: orderId,
@@ -924,10 +1020,13 @@ function normalizeLivePosOrder(
             "-",
         product: itemText,
         itemsText: itemText,
+        lineItems,
         category: asLiveText(raw.category, raw.categoryName, raw.category_name),
-        quantity: asLiveNumber(
-            raw.quantity ?? raw.totalQuantity ?? raw.total_quantity
-        ),
+        quantity:
+            structuredQuantity ||
+            asLiveNumber(
+                raw.quantity ?? raw.totalQuantity ?? raw.total_quantity
+            ),
         amount: asLiveNumber(
             raw.total ?? raw.amount ?? raw.grandTotal ?? raw.grand_total
         ),
@@ -2078,10 +2177,12 @@ function InventoryExportMenu({
                                  onExportPdf,
                                  onExportXlsx,
                                  onExportDoc,
+                                 label = "Export Filtered Inventory",
                              }: {
     onExportPdf: () => void;
     onExportXlsx: () => void;
     onExportDoc: () => void;
+    label?: string;
 }) {
     const [isOpen, setIsOpen] = useState(false);
 
@@ -2107,7 +2208,7 @@ function InventoryExportMenu({
                 className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[#7C4DFF] bg-white text-[12px] font-bold text-[#6334D4] transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#F4EDFF] hover:shadow-md focus:outline-none focus:ring-2 focus:ring-[#7C4DFF]/20"
             >
                 <FileSpreadsheet size={14} />
-                Export Filtered Inventory
+                {label}
                 <ChevronDown
                     size={14}
                     className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
@@ -2810,11 +2911,17 @@ function InventoryItemsTable({
 type RestockReportViewProps = {
     records: RestockRecord[];
     showBranchColumn: boolean;
+    onExportPdf: () => void;
+    onExportXlsx: () => void;
+    onExportDoc: () => void;
 };
 
 function RestockReportView({
                                records,
                                showBranchColumn,
+                               onExportPdf,
+                               onExportXlsx,
+                               onExportDoc,
                            }: RestockReportViewProps) {
     const totalUnitsAdded = sumBy(records, (item) => item.quantityAdded);
     const productsRestocked = new Set(
@@ -2825,10 +2932,6 @@ function RestockReportView({
             .map((item) => item.variantName?.trim().toLowerCase() || "")
             .filter(Boolean)
     ).size;
-
-    const latestRestock = [...records].sort((left, right) =>
-        right.date.localeCompare(left.date)
-    )[0];
 
     const restockByProduct = Array.from(
         records.reduce((summary, item) => {
@@ -3026,32 +3129,6 @@ function RestockReportView({
 
                 <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
                     <h3 className="text-[12px] font-bold text-[#211629]">
-                        Latest Restock
-                    </h3>
-                    {latestRestock ? (
-                        <div className="mt-3 rounded-[12px] border border-[#EEE7F2] bg-[#FCFAFD] p-3">
-                            <p className="break-words text-[11px] font-bold text-[#1A1220]">
-                                {latestRestock.product}
-                            </p>
-                            <p className="mt-1 text-[10px] text-[#6A5D6F]">
-                                {formatDate(latestRestock.date)}
-                            </p>
-                            <div className="mt-2 flex items-center justify-between gap-2 text-[10px]">
-                                <span className="text-[#7A6984]">Quantity Added</span>
-                                <span className="font-bold tabular-nums text-[#12A150]">
-                                    +{formatNumber(latestRestock.quantityAdded)}
-                                </span>
-                            </div>
-                        </div>
-                    ) : (
-                        <p className="mt-3 text-[10px] text-[#8A7A91]">
-                            No restock activity recorded.
-                        </p>
-                    )}
-                </div>
-
-                <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
-                    <h3 className="text-[12px] font-bold text-[#211629]">
                         Most Restocked Products
                     </h3>
                     <div className="mt-3 space-y-2">
@@ -3086,6 +3163,13 @@ function RestockReportView({
                         )}
                     </div>
                 </div>
+
+                <InventoryExportMenu
+                    label="Export Filtered Restock"
+                    onExportPdf={onExportPdf}
+                    onExportXlsx={onExportXlsx}
+                    onExportDoc={onExportDoc}
+                />
             </aside>
         </div>
     );
@@ -3142,15 +3226,20 @@ function SummaryMetricRow({
 type SummaryBarItem = {
     name: string;
     value: number;
+    orderCount?: number;
+    salesAmount?: number;
 };
 
 function SummaryBarList({
                             items,
                             emptyText,
+                            interactive = false,
                         }: {
     items: SummaryBarItem[];
     emptyText: string;
+    interactive?: boolean;
 }) {
+    const [expandedItem, setExpandedItem] = useState<string | null>(null);
     const maximum = Math.max(1, ...items.map((item) => item.value));
 
     if (items.length === 0) {
@@ -3159,53 +3248,214 @@ function SummaryBarList({
 
     return (
         <div className="space-y-2">
-            {items.map((item) => (
-                <div
-                    key={item.name}
-                    className="grid grid-cols-[72px_1fr_auto] items-center gap-1.5 text-[9px]"
-                >
-                    <span className="truncate text-[#5F5267]" title={item.name}>
-                        {item.name}
-                    </span>
-                    <span className="h-1.5 overflow-hidden rounded-full bg-[#EFE9F4]">
-                        <span
-                            className="block h-full rounded-full bg-[#7041E5]"
-                            style={{ width: `${(item.value / maximum) * 100}%` }}
-                        />
-                    </span>
-                    <span className="font-bold tabular-nums text-[#251A2C]">
-                        {formatNumber(item.value)}
-                    </span>
-                </div>
-            ))}
+            {items.map((item, index) => {
+                const isExpanded = interactive && expandedItem === item.name;
+                const percentage = Math.round((item.value / maximum) * 100);
+
+                if (!interactive) {
+                    return (
+                        <div
+                            key={item.name}
+                            className="grid grid-cols-[72px_1fr_auto] items-center gap-1.5 text-[9px]"
+                        >
+                            <span className="truncate text-[#5F5267]" title={item.name}>
+                                {item.name}
+                            </span>
+                            <span className="h-1.5 overflow-hidden rounded-full bg-[#EFE9F4]">
+                                <span
+                                    className="block h-full rounded-full bg-[#7041E5]"
+                                    style={{ width: `${percentage}%` }}
+                                />
+                            </span>
+                            <span className="font-bold tabular-nums text-[#251A2C]">
+                                {formatNumber(item.value)}
+                            </span>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div
+                        key={item.name}
+                        className={`overflow-hidden rounded-[10px] border transition ${
+                            isExpanded
+                                ? "border-[#CDB8F8] bg-[#FAF7FF]"
+                                : "border-transparent bg-white hover:border-[#E7DCF2] hover:bg-[#FCFAFF]"
+                        }`}
+                    >
+                        <button
+                            type="button"
+                            onClick={() =>
+                                setExpandedItem((current) =>
+                                    current === item.name ? null : item.name
+                                )
+                            }
+                            className="w-full px-2 py-2 text-left"
+                            aria-expanded={isExpanded}
+                            title={`View details for ${item.name}`}
+                        >
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#F0E9FF] text-[9px] font-bold text-[#6840C6]">
+                                        {index + 1}
+                                    </span>
+                                    <span className="truncate text-[10px] font-semibold text-[#392A42]">
+                                        {item.name}
+                                    </span>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                    <span className="text-[10px] font-bold tabular-nums text-[#251A2C]">
+                                        {formatNumber(item.value)}
+                                    </span>
+                                    {isExpanded ? (
+                                        <ChevronUp className="h-3.5 w-3.5 text-[#775F86]" />
+                                    ) : (
+                                        <ChevronDown className="h-3.5 w-3.5 text-[#775F86]" />
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="mt-2 flex items-center gap-2">
+                                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#EFE9F4]">
+                                    <span
+                                        className="block h-full rounded-full bg-[#7041E5] transition-all duration-300"
+                                        style={{ width: `${percentage}%` }}
+                                    />
+                                </span>
+                                <span className="w-8 text-right text-[8px] font-semibold tabular-nums text-[#806F89]">
+                                    {percentage}%
+                                </span>
+                            </div>
+                        </button>
+
+                        {isExpanded ? (
+                            <div className="grid grid-cols-2 gap-2 border-t border-[#E9DFF1] px-2 py-2.5">
+                                <div className="rounded-[8px] bg-white px-2 py-2">
+                                    <p className="text-[8px] uppercase tracking-[0.05em] text-[#8A7A91]">
+                                        Units Sold
+                                    </p>
+                                    <p className="mt-1 text-[11px] font-bold tabular-nums text-[#251A2C]">
+                                        {formatNumber(item.value)}
+                                    </p>
+                                </div>
+                                <div className="rounded-[8px] bg-white px-2 py-2">
+                                    <p className="text-[8px] uppercase tracking-[0.05em] text-[#8A7A91]">
+                                        Orders
+                                    </p>
+                                    <p className="mt-1 text-[11px] font-bold tabular-nums text-[#251A2C]">
+                                        {formatNumber(item.orderCount || 0)}
+                                    </p>
+                                </div>
+                                <div className="col-span-2 rounded-[8px] bg-white px-2 py-2">
+                                    <p className="text-[8px] uppercase tracking-[0.05em] text-[#8A7A91]">
+                                        POS Sales
+                                    </p>
+                                    <p className="mt-1 text-[11px] font-bold tabular-nums text-[#12A150]">
+                                        {formatPeso(item.salesAmount || 0)}
+                                    </p>
+                                </div>
+                            </div>
+                        ) : null}
+                    </div>
+                );
+            })}
         </div>
     );
 }
 
+type PosReportViewProps = {
+    records: SaleRecord[];
+    showBranchColumn: boolean;
+    onExportPdf: () => void;
+    onExportXlsx: () => void;
+    onExportDoc: () => void;
+};
+
 function PosReportView({
                            records,
                            showBranchColumn,
-                       }: {
-    records: SaleRecord[];
-    showBranchColumn: boolean;
-}) {
+                           onExportPdf,
+                           onExportXlsx,
+                           onExportDoc,
+                       }: PosReportViewProps) {
     const totalSalesValue = sumBy(records, (item) => item.amount);
     const totalItemsSold = sumBy(records, (item) => item.quantity);
     const averageTransaction = records.length
         ? totalSalesValue / records.length
         : 0;
-    const latestTransaction = [...records].sort((left, right) =>
-        right.date.localeCompare(left.date)
-    )[0];
-    const topSellingItems = Array.from(
-        records.reduce((summary, item) => {
-            const name = item.product || item.itemsText || "Unspecified Item";
-            summary.set(name, (summary.get(name) || 0) + Number(item.quantity || 0));
-            return summary;
-        }, new Map<string, number>())
-    )
-        .map(([name, value]) => ({ name, value }))
-        .sort((left, right) => right.value - left.value)
+
+    const topSellingSummary = new Map<
+        string,
+        {
+            value: number;
+            orderCount: number;
+            salesAmount: number;
+        }
+    >();
+
+    records.forEach((order) => {
+        const orderItems =
+            order.lineItems.length > 0
+                ? order.lineItems
+                : [
+                    {
+                        name:
+                            order.product ||
+                            order.itemsText ||
+                            "Unspecified Item",
+                        quantity: Number(order.quantity || 0),
+                        unitPrice: 0,
+                        lineTotal: Number(order.amount || 0),
+                    },
+                ];
+        const countedInOrder = new Set<string>();
+
+        orderItems.forEach((lineItem) => {
+            const name = lineItem.name.trim() || "Unspecified Item";
+            const quantity = Math.max(0, Number(lineItem.quantity || 0));
+
+            if (quantity <= 0) {
+                return;
+            }
+
+            const current =
+                topSellingSummary.get(name) || {
+                    value: 0,
+                    orderCount: 0,
+                    salesAmount: 0,
+                };
+
+            current.value += quantity;
+            current.salesAmount += Math.max(
+                0,
+                Number(
+                    lineItem.lineTotal ||
+                    lineItem.unitPrice * quantity ||
+                    0
+                )
+            );
+
+            if (!countedInOrder.has(name)) {
+                current.orderCount += 1;
+                countedInOrder.add(name);
+            }
+
+            topSellingSummary.set(name, current);
+        });
+    });
+
+    const topSellingItems = Array.from(topSellingSummary.entries())
+        .map(([name, summary]) => ({
+            name,
+            value: summary.value,
+            orderCount: summary.orderCount,
+            salesAmount: summary.salesAmount,
+        }))
+        .sort((left, right) =>
+            right.value - left.value ||
+            right.salesAmount - left.salesAmount ||
+            left.name.localeCompare(right.name)
+        )
         .slice(0, 6);
     const columnCount = showBranchColumn ? 5 : 4;
 
@@ -3297,33 +3547,25 @@ function PosReportView({
                 </div>
 
                 <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
-                    <h3 className="text-[12px] font-bold text-[#211629]">Latest Transaction</h3>
-                    {latestTransaction ? (
-                        <div className="mt-3 rounded-[12px] border border-[#EEE7F2] bg-[#FCFAFD] p-3">
-                            <p className="break-words text-[11px] font-bold text-[#1A1220]">
-                                {latestTransaction.reference || latestTransaction.id}
-                            </p>
-                            <p className="mt-1 text-[10px] text-[#6A5D6F]">
-                                {formatDate(latestTransaction.date)}
-                            </p>
-                            <div className="mt-2 flex items-center justify-between gap-2 text-[10px]">
-                                <span className="text-[#7A6984]">Amount</span>
-                                <span className="font-bold tabular-nums text-[#12A150]">
-                                    {formatPeso(latestTransaction.amount)}
-                                </span>
-                            </div>
-                        </div>
-                    ) : (
-                        <p className="mt-3 text-[10px] text-[#8A7A91]">No POS activity recorded.</p>
-                    )}
-                </div>
-
-                <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
                     <h3 className="text-[12px] font-bold text-[#211629]">Top Selling Items</h3>
+                    <p className="mt-1 text-[9px] text-[#8A7A91]">
+                        Click an item to view its sales details.
+                    </p>
                     <div className="mt-3">
-                        <SummaryBarList items={topSellingItems} emptyText="No item sales data available." />
+                        <SummaryBarList
+                            items={topSellingItems}
+                            emptyText="No item sales data available."
+                            interactive
+                        />
                     </div>
                 </div>
+
+                <InventoryExportMenu
+                    label="Export Filtered POS"
+                    onExportPdf={onExportPdf}
+                    onExportXlsx={onExportXlsx}
+                    onExportDoc={onExportDoc}
+                />
             </aside>
         </div>
     );
@@ -3337,6 +3579,9 @@ type BookingReportViewProps = {
     expandedBookingId: string | null;
     onToggleExpanded: (bookingId: string) => void;
     showBranchColumn: boolean;
+    onExportPdf: () => void;
+    onExportXlsx: () => void;
+    onExportDoc: () => void;
 };
 
 function BookingReportView({
@@ -3347,6 +3592,9 @@ function BookingReportView({
                                expandedBookingId,
                                onToggleExpanded,
                                showBranchColumn,
+                               onExportPdf,
+                               onExportXlsx,
+                               onExportDoc,
                            }: BookingReportViewProps) {
     const query = searchQuery.trim().toLowerCase();
     const searchedRecords = records.filter((item) =>
@@ -3370,9 +3618,6 @@ function BookingReportView({
         activeFilter === "all"
             ? searchedRecords
             : searchedRecords.filter((item) => item.status === activeFilter);
-    const latestBooking = [...searchedRecords].sort((left, right) =>
-        right.date.localeCompare(left.date)
-    )[0];
     const topPackages = Array.from(
         searchedRecords.reduce((summary, item) => {
             const name = item.packageName || "Custom Booking";
@@ -3520,29 +3765,18 @@ function BookingReportView({
                 </div>
 
                 <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
-                    <h3 className="text-[12px] font-bold text-[#211629]">Latest Booking</h3>
-                    {latestBooking ? (
-                        <div className="mt-3 rounded-[12px] border border-[#EEE7F2] bg-[#FCFAFD] p-3">
-                            <p className="break-words text-[11px] font-bold text-[#1A1220]">{latestBooking.customer}</p>
-                            <p className="mt-1 text-[10px] text-[#6A5D6F]">{formatDate(latestBooking.eventDate)}</p>
-                            <div className="mt-2 flex items-center justify-between gap-2 text-[10px]">
-                                <span className="text-[#7A6984]">Package</span>
-                                <span className="max-w-[120px] truncate font-bold text-[#4E2C66]" title={latestBooking.packageName}>
-                                    {latestBooking.packageName}
-                                </span>
-                            </div>
-                        </div>
-                    ) : (
-                        <p className="mt-3 text-[10px] text-[#8A7A91]">No booking activity recorded.</p>
-                    )}
-                </div>
-
-                <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
                     <h3 className="text-[12px] font-bold text-[#211629]">Top Packages</h3>
                     <div className="mt-3">
                         <SummaryBarList items={topPackages} emptyText="No package booking data available." />
                     </div>
                 </div>
+
+                <InventoryExportMenu
+                    label="Export Filtered Booking"
+                    onExportPdf={onExportPdf}
+                    onExportXlsx={onExportXlsx}
+                    onExportDoc={onExportDoc}
+                />
             </aside>
         </div>
     );
@@ -4135,7 +4369,9 @@ export function ReportsWorkspace({
             "stocknbook_store_id",
         ]);
         const request: Record<string, unknown> = {
-            action: "get_bookings",
+            // The report only needs the lightweight booking-page fields.
+            // This avoids legacy package snapshot columns and keeps the report query stable.
+            action: "get_booking_page_bookings",
             role: initialRole,
         };
         const numericBranchId = Number(scopedSalesBranchId);
@@ -4894,7 +5130,150 @@ export function ReportsWorkspace({
         };
     }
 
-    function exportDoc(table: ExportTable) {
+    function getFilteredRestockExportTable(): ExportTable {
+        const headers = [
+            "Date",
+            "Reference",
+            "Product",
+            "Type",
+            ...(showBranchColumn ? ["Branch"] : []),
+            "Stock Before",
+            "Qty Added",
+            "Current Stock",
+            "Received By",
+        ];
+
+        const rows = displayedRestocks.map((item) => {
+            const stockBefore =
+                typeof item.stockBefore === "number"
+                    ? item.stockBefore
+                    : Math.max(
+                        Number(item.currentStock || 0) -
+                        Number(item.quantityAdded || 0),
+                        0
+                    );
+
+            return [
+                formatDate(item.date),
+                item.reference || item.id,
+                item.variantName
+                    ? `${item.product} - ${item.variantName}`
+                    : item.product,
+                item.variantName ? "Variant" : "Regular",
+                ...(showBranchColumn ? [item.branch] : []),
+                formatNumber(stockBefore),
+                formatNumber(item.quantityAdded),
+                formatNumber(item.currentStock),
+                item.receivedBy || "Not recorded",
+            ];
+        });
+
+        return {
+            title: "Filtered Restock Report",
+            headers,
+            rows,
+        };
+    }
+
+    function getFilteredPosExportTable(): ExportTable {
+        const headers = [
+            "Order ID",
+            ...(showBranchColumn ? ["Branch"] : []),
+            "Items",
+            "Total",
+            "Date",
+        ];
+
+        const rows = displayedPosTransactions.map((item) => [
+            item.reference || item.id,
+            ...(showBranchColumn ? [item.branch || "—"] : []),
+            getSaleItemsLabel(item),
+            formatPeso(item.amount),
+            formatDate(item.date),
+        ]);
+
+        return {
+            title: "Filtered POS Report",
+            headers,
+            rows,
+        };
+    }
+
+    function getFilteredBookingExportTable(): ExportTable {
+        const query = searchQuery.trim().toLowerCase();
+        const filteredBookings = bookings.filter((item) => {
+            const matchesSearch =
+                !query ||
+                [
+                    item.id,
+                    item.reference,
+                    item.customer,
+                    item.phone,
+                    item.venue,
+                    item.packageName,
+                    item.statusLabel,
+                    item.paymentStatus,
+                    item.branch,
+                ]
+                    .join(" ")
+                    .toLowerCase()
+                    .includes(query);
+
+            const matchesStatus =
+                bookingFilter === "all" || item.status === bookingFilter;
+
+            return matchesSearch && matchesStatus;
+        });
+
+        const headers = [
+            "Booking ID",
+            "Reference",
+            "Client",
+            "Phone",
+            ...(showBranchColumn ? ["Branch"] : []),
+            "Event Date",
+            "Time",
+            "Package",
+            "Package Price",
+            "Payment Status",
+            "Amount Paid",
+            "Balance",
+            "Booking Status",
+            "Venue",
+        ];
+
+        const rows = filteredBookings.map((item) => {
+            const payment = getBookingPaymentDetails(item);
+
+            return [
+                item.id,
+                item.reference || item.id,
+                item.customer || "Not recorded",
+                item.phone || "Not recorded",
+                ...(showBranchColumn ? [item.branch || "—"] : []),
+                formatDate(item.eventDate),
+                item.scheduleTime || "Time not recorded",
+                item.packageName || "Custom Booking",
+                formatPeso(payment.packagePrice),
+                payment.paymentStatus || "Not recorded",
+                formatPeso(payment.amountPaid),
+                formatPeso(payment.balance),
+                getBookingStatusLabel(item),
+                item.venue || "Venue not recorded",
+            ];
+        });
+
+        return {
+            title: "Filtered Booking Report",
+            headers,
+            rows,
+        };
+    }
+
+    function exportDoc(
+        table: ExportTable,
+        filenamePrefix = "stocknbook-full-inventory"
+    ) {
         const rows = table.rows
             .map(
                 (row) =>
@@ -4932,13 +5311,17 @@ export function ReportsWorkspace({
     `;
 
         downloadFile(
-            `stocknbook-full-inventory-${startDate}.doc`,
+            `${filenamePrefix}-${startDate}.doc`,
             "application/msword;charset=utf-8",
             documentHtml
         );
     }
 
-    function exportExcel(table: ExportTable) {
+    function exportExcel(
+        table: ExportTable,
+        filenamePrefix = "stocknbook-full-inventory",
+        sheetName = "Inventory Report"
+    ) {
         const worksheet = XLSX.utils.aoa_to_sheet([
             [table.title],
             [
@@ -4961,11 +5344,14 @@ export function ReportsWorkspace({
         });
 
         const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Inventory Report");
-        XLSX.writeFile(workbook, `stocknbook-full-inventory-${startDate}.xlsx`);
+        XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+        XLSX.writeFile(workbook, `${filenamePrefix}-${startDate}.xlsx`);
     }
 
-    function exportPdf(table: ExportTable) {
+    function exportPdf(
+        table: ExportTable,
+        filenamePrefix = "stocknbook-full-inventory"
+    ) {
         const pdf = createTablePdf({
             title: table.title,
             storeName: activeStoreName,
@@ -4976,7 +5362,7 @@ export function ReportsWorkspace({
         });
 
         downloadFile(
-            `stocknbook-full-inventory-${startDate}.pdf`,
+            `${filenamePrefix}-${startDate}.pdf`,
             "application/pdf",
             pdf
         );
@@ -5473,6 +5859,25 @@ export function ReportsWorkspace({
                         <RestockReportView
                             records={displayedRestocks}
                             showBranchColumn={showBranchColumn}
+                            onExportPdf={() =>
+                                exportPdf(
+                                    getFilteredRestockExportTable(),
+                                    "stocknbook-restock-report"
+                                )
+                            }
+                            onExportXlsx={() =>
+                                exportExcel(
+                                    getFilteredRestockExportTable(),
+                                    "stocknbook-restock-report",
+                                    "Restock Report"
+                                )
+                            }
+                            onExportDoc={() =>
+                                exportDoc(
+                                    getFilteredRestockExportTable(),
+                                    "stocknbook-restock-report"
+                                )
+                            }
                         />
                     )}
 
@@ -5489,6 +5894,25 @@ export function ReportsWorkspace({
                                 )
                             }
                             showBranchColumn={showBranchColumn}
+                            onExportPdf={() =>
+                                exportPdf(
+                                    getFilteredBookingExportTable(),
+                                    "stocknbook-booking-report"
+                                )
+                            }
+                            onExportXlsx={() =>
+                                exportExcel(
+                                    getFilteredBookingExportTable(),
+                                    "stocknbook-booking-report",
+                                    "Booking Report"
+                                )
+                            }
+                            onExportDoc={() =>
+                                exportDoc(
+                                    getFilteredBookingExportTable(),
+                                    "stocknbook-booking-report"
+                                )
+                            }
                         />
                     )}
 
@@ -5496,6 +5920,25 @@ export function ReportsWorkspace({
                         <PosReportView
                             records={displayedPosTransactions}
                             showBranchColumn={showBranchColumn}
+                            onExportPdf={() =>
+                                exportPdf(
+                                    getFilteredPosExportTable(),
+                                    "stocknbook-pos-report"
+                                )
+                            }
+                            onExportXlsx={() =>
+                                exportExcel(
+                                    getFilteredPosExportTable(),
+                                    "stocknbook-pos-report",
+                                    "POS Report"
+                                )
+                            }
+                            onExportDoc={() =>
+                                exportDoc(
+                                    getFilteredPosExportTable(),
+                                    "stocknbook-pos-report"
+                                )
+                            }
                         />
                     )}
 

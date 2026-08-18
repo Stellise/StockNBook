@@ -329,11 +329,11 @@ async function loadInventory(
 async function ensureRestockHistoryTable(connection: Connection) {
     await connection.execute(`
         CREATE TABLE IF NOT EXISTS restock_history (
-            id BIGINT NOT NULL AUTO_INCREMENT,
-            store_id BIGINT NOT NULL,
-            branch_id BIGINT NOT NULL,
-            product_id BIGINT NOT NULL,
-            product_name VARCHAR(255) NOT NULL,
+                                                       id BIGINT NOT NULL AUTO_INCREMENT,
+                                                       store_id BIGINT NOT NULL,
+                                                       branch_id BIGINT NOT NULL,
+                                                       product_id BIGINT NOT NULL,
+                                                       product_name VARCHAR(255) NOT NULL,
             variant_name VARCHAR(255) NULL,
             stock_before INT NOT NULL DEFAULT 0,
             quantity_added INT NOT NULL DEFAULT 0,
@@ -346,7 +346,7 @@ async function ensureRestockHistoryTable(connection: Connection) {
             INDEX idx_restock_branch (branch_id),
             INDEX idx_restock_product (product_id),
             INDEX idx_restock_created_at (created_at)
-        )
+            )
     `);
 }
 
@@ -372,9 +372,9 @@ async function loadRestockHistory(
             DATE_FORMAT(rh.created_at, '%Y-%m-%d') AS restock_date,
             br.branch_name
         FROM restock_history rh
-        LEFT JOIN branches br
-            ON br.id = rh.branch_id
-           AND br.store_id = rh.store_id
+                 LEFT JOIN branches br
+                           ON br.id = rh.branch_id
+                               AND br.store_id = rh.store_id
         WHERE rh.store_id = ?
           AND DATE(rh.created_at) BETWEEN ? AND ?
     `;
@@ -519,8 +519,8 @@ async function loadBookings(
             b.amount_paid,
             b.balance
         FROM bookings b
-        LEFT JOIN branches br
-            ON br.id = b.branch_id AND br.store_id = b.store_id
+                 LEFT JOIN branches br
+                           ON br.id = b.branch_id AND br.store_id = b.store_id
         WHERE b.store_id = ?
           AND b.event_date BETWEEN ? AND ?
     `;

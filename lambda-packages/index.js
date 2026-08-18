@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const mysql = require("mysql2/promise");
 const jwt = require("jsonwebtoken");
-const fs = require("fs");
 
 const JWT_SECRET = "stocknbook-secret-key";
 
@@ -14,11 +13,7 @@ const dbConfig = {
 };
 
 function jsonResponse(statusCode, headers, body) {
-    return {
-        statusCode,
-        headers,
-        body: JSON.stringify(body),
-    };
+    return { statusCode, headers, body: JSON.stringify(body) };
 }
 
 function badRequest(headers, message) {
@@ -33,13 +28,10 @@ function notFound(headers, message) {
     return jsonResponse(404, headers, { error: message });
 }
 
-function serverError(headers, err) {
-    const message = err instanceof Error ? err.message : "Internal server error";
-
-    console.error("Lambda error:", err);
-
+function serverError(headers, error) {
+    console.error("Packages Lambda error:", error);
     return jsonResponse(500, headers, {
-        error: message,
+        error: error instanceof Error ? error.message : "Internal server error",
     });
 }
 
@@ -48,139 +40,39 @@ function toSafeString(value, max = 255) {
 }
 
 function toNumber(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
 }
 
 function firstDefined(...values) {
     return values.find((value) => value !== undefined && value !== null);
 }
 
-function parseBooleanFlag(value) {
-    if (typeof value === "boolean") return value;
-    if (typeof value === "number") return value === 1;
-
-    if (typeof value === "string") {
-        const clean = value.trim().toLowerCase();
-        return clean === "1" || clean === "true" || clean === "yes";
-    }
-
-    return false;
-}
-
-function parseVariantValues(value) {
-    if (!value) return {};
-
-    if (typeof value === "string") {
-        try {
-            const parsed = JSON.parse(value);
-            return typeof parsed === "object" && parsed !== null ? parsed : {};
-        } catch {
-            return {};
-        }
-    }
-
-    if (typeof value === "object") return value;
-
-    return {};
-}
-
-function cleanVariantValues(value) {
-    const rawValues = parseVariantValues(value);
-    const cleaned = {};
-
-    Object.entries(rawValues).forEach(([key, val]) => {
-        const cleanKey = String(key || "").trim().toLowerCase();
-        const cleanValue = String(val || "").trim();
-
-        if (cleanKey && cleanValue) {
-            cleaned[cleanKey] = cleanValue;
-        }
-    });
-
-    return cleaned;
-}
-
-function getIncomingVariants(body) {
-    const rawVariants =
-        body.variants ||
-        body.product_variants ||
-        body.productVariants ||
-        body.variant_details ||
-        [];
-
-    if (!Array.isArray(rawVariants)) return [];
-
-    return rawVariants
-        .map((variant) => {
-            const variantValues = cleanVariantValues(
-                firstDefined(
-                    variant.variantValues,
-                    variant.variant_values,
-                    variant.values
-                )
-            );
-
-            return {
-                variantValues,
-                stock: toNumber(firstDefined(variant.stock, variant.quantity, variant.qty)) ?? 0,
-                alertLevel:
-                    toNumber(firstDefined(variant.alertLevel, variant.alert_level, variant.alert)) ?? 0,
-                originalPrice:
-                    toNumber(
-                        firstDefined(
-                            variant.originalPrice,
-                            variant.original_price,
-                            variant.costPrice,
-                            variant.cost_price,
-                            variant.original
-                        )
-                    ) ?? 0,
-                salesPrice:
-                    toNumber(
-                        firstDefined(
-                            variant.salesPrice,
-                            variant.sales_price,
-                            variant.price,
-                            variant.sales
-                        )
-                    ) ?? 0,
-            };
-        })
-        .filter((variant) => Object.keys(variant.variantValues).length > 0);
-}
-
-function getVariantTotalStock(variants) {
-    return variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0);
-}
-
-function getVariantTotalAlert(variants) {
-    return variants.reduce((sum, variant) => sum + Number(variant.alertLevel || 0), 0);
-}
-
-function getMinVariantPrice(variants, field) {
-    const prices = variants
-        .map((variant) => Number(variant[field] || 0))
-        .filter((price) => Number.isFinite(price) && price > 0);
-
-    return prices.length > 0 ? Math.min(...prices) : 0;
+function normalizeAction(value) {
+    return toSafeString(value, 80)
+        .replace(/([a-z])([A-Z])/g, "$1_$2")
+        .replace(/[-\s]+/g, "_")
+        .toLowerCase();
 }
 
 async function safeRollback(connection) {
     try {
         if (connection) await connection.rollback();
     } catch {
-        // Ignore rollback error.
+        // Ignore rollback errors.
     }
 }
 
 async function ensureStoreExists(connection, storeId) {
-    const parsed = Number(storeId);
-    if (!Number.isInteger(parsed) || parsed <= 0) return false;
+    const parsedStoreId = Number(storeId);
+
+    if (!Number.isInteger(parsedStoreId) || parsedStoreId <= 0) {
+        return false;
+    }
 
     const [rows] = await connection.execute(
         "SELECT id FROM stores WHERE id = ? LIMIT 1",
-        [parsed]
+        [parsedStoreId]
     );
 
     return rows.length > 0;
@@ -194,235 +86,298 @@ async function ensureBranchBelongsToStore(connection, branchId, storeId) {
     if (!Number.isInteger(parsedStoreId) || parsedStoreId <= 0) return false;
 
     const [rows] = await connection.execute(
-        "SELECT id FROM branches WHERE id = ? AND store_id = ? LIMIT 1",
+        `SELECT id
+         FROM branches
+         WHERE id = ?
+           AND store_id = ?
+         LIMIT 1`,
         [parsedBranchId, parsedStoreId]
     );
 
     return rows.length > 0;
 }
 
-function normalizeVariantRow(row) {
+function normalizeInclusion(item, index = 0) {
+    const productId = Number(
+        firstDefined(item?.productId, item?.product_id) || 0
+    );
+
+    const rawVariantId = firstDefined(
+        item?.variantId,
+        item?.variant_id
+    );
+
+    const variantId =
+        rawVariantId !== undefined &&
+        rawVariantId !== null &&
+        rawVariantId !== ""
+            ? Number(rawVariantId)
+            : null;
+
+    const quantity = Math.max(
+        0,
+        Number(firstDefined(item?.quantity, item?.qty) || 0)
+    );
+
+    const unitSalesPrice = Number(
+        firstDefined(
+            item?.unitSalesPrice,
+            item?.unit_sales_price,
+            item?.unitPrice,
+            item?.unit_price,
+            item?.salesPrice,
+            item?.sales_price,
+            item?.price
+        ) || 0
+    );
+
+    const productName = toSafeString(
+        firstDefined(
+            item?.productName,
+            item?.product_name,
+            item?.item,
+            item?.name
+        ),
+        255
+    );
+
+    const variantName = toSafeString(
+        firstDefined(
+            item?.variantName,
+            item?.variant_name,
+            item?.variantLabel,
+            item?.variant_label
+        ),
+        255
+    );
+
+    const lineValue =
+        toNumber(
+            firstDefined(
+                item?.lineValue,
+                item?.line_value,
+                item?.lineTotal,
+                item?.line_total
+            )
+        ) ?? unitSalesPrice * quantity;
+
+    const availableStock = Number(
+        firstDefined(
+            item?.availableStock,
+            item?.available_stock
+        ) || 0
+    );
+
+    const inventoryKey =
+        toSafeString(
+            firstDefined(item?.inventoryKey, item?.inventory_key),
+            255
+        ) ||
+        (variantId
+            ? `product:${productId}:variant:${variantId}`
+            : `product:${productId}:regular`) ||
+        `package-item:${index}`;
+
     return {
-        id: Number(row.id),
-        productId: Number(row.productId ?? row.product_id),
-        variantValues: parseVariantValues(row.variantValues ?? row.variant_values),
-        stock: Number(row.stock ?? 0),
-        alertLevel: Number(row.alertLevel ?? row.alert_level ?? 0),
-        originalPrice: Number(row.originalPrice ?? row.original_price ?? 0),
-        salesPrice: Number(row.salesPrice ?? row.sales_price ?? 0),
-        createdAt: row.createdAt ?? row.created_at ?? "",
+        inventoryKey,
+        productId,
+        product_id: productId,
+        variantId,
+        variant_id: variantId,
+        productName,
+        product_name: productName,
+        variantName,
+        variant_name: variantName,
+        quantity,
+        unitSalesPrice,
+        unit_sales_price: unitSalesPrice,
+        unitPrice: unitSalesPrice,
+        unit_price: unitSalesPrice,
+        lineValue,
+        line_value: lineValue,
+        availableStock,
+        available_stock: availableStock,
+
+        // Legacy aliases are preserved for old saved package rows.
+        item: item?.item || productName,
+        variantLabel:
+            item?.variantLabel ||
+            item?.variant_label ||
+            variantName,
+        variant_label:
+            item?.variant_label ||
+            item?.variantLabel ||
+            variantName,
     };
 }
 
-async function attachVariants(connection, products) {
-    if (!Array.isArray(products) || products.length === 0) return [];
+function parseInclusions(value) {
+    let raw = [];
 
-    const productIds = products.map((product) => Number(product.id)).filter(Boolean);
-
-    if (productIds.length === 0) {
-        return products.map((product) => ({
-            ...product,
-            hasVariants: false,
-            has_variants: 0,
-            variants: [],
-        }));
-    }
-
-    const placeholders = productIds.map(() => "?").join(",");
-
-    const [variantRows] = await connection.execute(
-        `SELECT
-             id,
-             product_id AS productId,
-             variant_values AS variantValues,
-             stock,
-             alert_level AS alertLevel,
-             original_price AS originalPrice,
-             sales_price AS salesPrice,
-             created_at AS createdAt
-         FROM product_variants
-         WHERE product_id IN (${placeholders})
-         ORDER BY id ASC`,
-        productIds
-    );
-
-    const variantsByProductId = {};
-
-    variantRows.forEach((row) => {
-        const variant = normalizeVariantRow(row);
-        const key = String(variant.productId);
-
-        if (!variantsByProductId[key]) {
-            variantsByProductId[key] = [];
+    try {
+        if (Array.isArray(value)) {
+            raw = value;
+        } else if (typeof value === "string" && value.trim()) {
+            const parsed = JSON.parse(value);
+            raw = Array.isArray(parsed) ? parsed : [];
         }
-
-        variantsByProductId[key].push(variant);
-    });
-
-    return products.map((product) => {
-        const variants = variantsByProductId[String(product.id)] || [];
-        const hasVariants =
-            Number(product.hasVariants ?? product.has_variants ?? 0) === 1 ||
-            variants.length > 0;
-
-        return {
-            ...product,
-            hasVariants,
-            has_variants: hasVariants ? 1 : 0,
-            variants,
-        };
-    });
-}
-
-async function getProducts(connection, storeId, activeBranchId, productId = null) {
-    let query = `
-        SELECT
-            products.id,
-            products.store_id AS storeId,
-            products.branch_id AS branchId,
-            branches.branch_name AS branchName,
-            products.name,
-            products.category,
-            products.stock,
-            products.alert_level AS alertLevel,
-            products.original_price AS originalPrice,
-            products.sales_price AS salesPrice,
-            products.has_variants AS hasVariants,
-            products.created_at AS createdAt
-        FROM products
-                 LEFT JOIN branches
-                           ON products.branch_id = branches.id
-                               AND products.store_id = branches.store_id
-        WHERE products.store_id = ?
-    `;
-
-    const params = [storeId];
-
-    if (activeBranchId) {
-        query += " AND products.branch_id = ?";
-        params.push(activeBranchId);
+    } catch {
+        raw = [];
     }
 
-    if (productId) {
-        query += " AND products.id = ?";
-        params.push(productId);
-    }
-
-    query += " ORDER BY products.created_at DESC";
-
-    const [rows] = await connection.execute(query, params);
-
-    return attachVariants(connection, rows);
+    return raw.map(normalizeInclusion);
 }
 
-async function getProductById(connection, storeId, activeBranchId, productId) {
-    const products = await getProducts(connection, storeId, activeBranchId, productId);
-    return products[0] || null;
+function normalizePackageRow(row) {
+    return {
+        id: Number(row.id),
+        store_id: Number(row.store_id),
+        branch_id: Number(row.branch_id),
+        name: row.name || "",
+        description: row.description || "",
+        original_value: Number(row.original_value || 0),
+        discount_type: row.discount_type || "amount",
+        discount_value: Number(row.discount_value || 0),
+        package_price: Number(row.package_price || 0),
+        down_payment_amount: Number(row.down_payment_amount || 0),
+        duration: row.duration || "",
+        status: row.status || "Active",
+        category: row.category || undefined,
+        cover_image: row.cover_image || "",
+        inclusions: parseInclusions(row.inclusions),
+        created_at: row.created_at || "",
+    };
 }
 
-async function insertProductVariants(connection, productId, variants) {
-    if (!Array.isArray(variants) || variants.length === 0) return;
-
-    const placeholders = variants.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-
-    const params = variants.flatMap((variant) => [
-        productId,
-        JSON.stringify(variant.variantValues || {}),
-        Number(variant.stock || 0),
-        Number(variant.alertLevel || 0),
-        Number(variant.originalPrice || 0),
-        Number(variant.salesPrice || 0),
-    ]);
-
-    await connection.execute(
-        `INSERT INTO product_variants
-         (product_id, variant_values, stock, alert_level, original_price, sales_price)
-         VALUES ${placeholders}`,
-        params
-    );
-}
-
-/* DUPLICATE VALIDATION HELPERS */
-
-function normalizeDuplicateText(value) {
-    return String(value ?? "")
-        .trim()
-        .replace(/\s+/g, " ")
-        .toLowerCase();
-}
-
-function getVariantSignature(values) {
-    const entries = Object.entries(values || {})
-        .map(([key, value]) => [
-            normalizeDuplicateText(key),
-            normalizeDuplicateText(value),
-        ])
-        .filter(([, value]) => value.length > 0)
-        .sort(([keyA, valueA], [keyB, valueB]) => {
-            const keyCompare = keyA.localeCompare(keyB);
-            return keyCompare !== 0 ? keyCompare : valueA.localeCompare(valueB);
-        });
-
-    if (entries.length === 0) return "";
-
-    return entries.map(([key, value]) => `${key}:${value}`).join("|");
-}
-
-function getVariantDisplayName(values) {
-    return (
-        Object.values(values || {})
-            .map((value) => String(value || "").trim())
-            .filter(Boolean)
-            .join(", ") || "Unnamed variant"
-    );
-}
-
-function getDuplicateVariantLabel(variants) {
-    const seen = new Map();
-
-    for (const variant of variants || []) {
-        const signature = getVariantSignature(variant.variantValues);
-
-        if (!signature) continue;
-
-        const displayName = getVariantDisplayName(variant.variantValues);
-
-        if (seen.has(signature)) {
-            return displayName;
-        }
-
-        seen.set(signature, displayName);
-    }
-
-    return "";
-}
-
-async function findExistingProductByName(
+async function getPackageById(
     connection,
     storeId,
     branchId,
-    productName,
-    excludeProductId = null
+    packageId
 ) {
-    const [rows] = await connection.execute(
-        `SELECT id, name
-         FROM products
-         WHERE store_id = ?
-           AND branch_id = ?`,
-        [storeId, branchId]
-    );
+    let query = `
+        SELECT *
+        FROM packages
+        WHERE id = ?
+          AND store_id = ?
+    `;
 
-    const cleanName = normalizeDuplicateText(productName);
+    const params = [packageId, storeId];
 
-    return (
-        rows.find((row) => {
-            const sameName = normalizeDuplicateText(row.name) === cleanName;
-            const notCurrentProduct =
-                !excludeProductId || Number(row.id) !== Number(excludeProductId);
+    if (branchId) {
+        query += " AND branch_id = ?";
+        params.push(branchId);
+    }
 
-            return sameName && notCurrentProduct;
-        }) || null
-    );
+    query += " LIMIT 1";
+
+    const [rows] = await connection.execute(query, params);
+
+    return rows.length > 0
+        ? normalizePackageRow(rows[0])
+        : null;
+}
+
+function getIncomingPackage(body) {
+    return {
+        name: toSafeString(body.name, 255),
+        description: toSafeString(body.description, 5000),
+        category: toSafeString(body.category, 120),
+
+        coverImage:
+            typeof body.cover_image === "string"
+                ? body.cover_image
+                : typeof body.coverImage === "string"
+                    ? body.coverImage
+                    : "",
+
+        originalValue:
+            toNumber(firstDefined(body.original_value, body.originalValue)) ?? 0,
+
+        discountType:
+            toSafeString(
+                firstDefined(body.discount_type, body.discountType),
+                30
+            ) || "amount",
+
+        discountValue:
+            toNumber(firstDefined(body.discount_value, body.discountValue)) ?? 0,
+
+        packagePrice:
+            toNumber(firstDefined(body.package_price, body.packagePrice)) ?? 0,
+
+        downPaymentAmount:
+            toNumber(
+                firstDefined(
+                    body.down_payment_amount,
+                    body.downPaymentAmount
+                )
+            ) ?? 0,
+
+        duration: toSafeString(body.duration, 100) || "N/A",
+        status: toSafeString(body.status, 30) || "Active",
+
+        inclusions: Array.isArray(body.inclusions)
+            ? body.inclusions.map(normalizeInclusion)
+            : [],
+    };
+}
+
+function validatePackageInput(pkg) {
+    if (!pkg.name) return "Package name is required.";
+
+    if (pkg.inclusions.length === 0) {
+        return "Please add at least one product inclusion.";
+    }
+
+    if (
+        pkg.discountType !== "amount" &&
+        pkg.discountType !== "percentage"
+    ) {
+        return "Invalid discount type.";
+    }
+
+    if (pkg.discountValue < 0) {
+        return "Discount cannot be negative.";
+    }
+
+    if (
+        pkg.discountType === "percentage" &&
+        pkg.discountValue > 100
+    ) {
+        return "Percentage discount cannot exceed 100%.";
+    }
+
+    if (pkg.originalValue < 0) {
+        return "Original value cannot be negative.";
+    }
+
+    if (pkg.packagePrice < 0) {
+        return "Package price cannot be negative.";
+    }
+
+    if (pkg.downPaymentAmount < 0) {
+        return "Down payment cannot be negative.";
+    }
+
+    if (pkg.downPaymentAmount > pkg.packagePrice) {
+        return "Down payment cannot exceed package price.";
+    }
+
+    for (const inclusion of pkg.inclusions) {
+        if (
+            !Number.isInteger(inclusion.productId) ||
+            inclusion.productId <= 0
+        ) {
+            return "Each package inclusion must contain a valid productId.";
+        }
+
+        if (!Number.isFinite(inclusion.quantity) || inclusion.quantity <= 0) {
+            return "Each package inclusion must contain a valid quantity.";
+        }
+    }
+
+    return "";
 }
 
 exports.handler = async (event) => {
@@ -446,53 +401,14 @@ exports.handler = async (event) => {
     try {
         body = JSON.parse(event?.body || "{}");
     } catch {
-        return badRequest(headers, "Invalid JSON body");
+        return badRequest(headers, "Invalid JSON body.");
     }
 
-    const action = body.action;
+    const action = normalizeAction(body.action);
     let connection;
 
     try {
         connection = await mysql.createConnection(dbConfig);
-
-        // ── PUBLIC: get_public_products for customer booking portal ─────────────
-        if (action === "get_public_products") {
-            const publicStoreId = Number(body.store_id || body.storeId);
-            const publicBranchId =
-                body.branch_id || body.branchId
-                    ? Number(body.branch_id || body.branchId)
-                    : null;
-
-            if (!Number.isInteger(publicStoreId) || publicStoreId <= 0) {
-                return badRequest(headers, "Missing or invalid store_id");
-            }
-
-            const storeExists = await ensureStoreExists(connection, publicStoreId);
-
-            if (!storeExists) {
-                return badRequest(headers, "Store account not found");
-            }
-
-            if (publicBranchId) {
-                const branchOk = await ensureBranchBelongsToStore(
-                    connection,
-                    publicBranchId,
-                    publicStoreId
-                );
-
-                if (!branchOk) {
-                    return badRequest(headers, "Invalid branch for this store");
-                }
-            }
-
-            const products = await getProducts(
-                connection,
-                publicStoreId,
-                publicBranchId
-            );
-
-            return jsonResponse(200, headers, { products });
-        }
 
         const authHeader =
             event?.headers?.authorization ||
@@ -500,38 +416,42 @@ exports.handler = async (event) => {
             "";
 
         if (!authHeader) {
-            return unauthorized(headers, "No token provided");
+            return unauthorized(headers, "No token provided.");
         }
 
-        let decoded;
         let storeId;
-        let tokenBranchId;
-        let tokenRole;
+        let tokenBranchId = null;
+        let tokenRole = "";
 
         try {
-            const token = authHeader.replace("Bearer ", "");
-            decoded = jwt.verify(token, JWT_SECRET);
+            const token = authHeader.replace(/^Bearer\s+/i, "");
+            const decoded = jwt.verify(token, JWT_SECRET);
 
             storeId = Number(decoded.store_id);
-            tokenBranchId = decoded.branch_id ? Number(decoded.branch_id) : null;
+            tokenBranchId = decoded.branch_id
+                ? Number(decoded.branch_id)
+                : null;
             tokenRole = String(decoded.role || "").toLowerCase();
         } catch {
-            return unauthorized(headers, "Invalid token");
+            return unauthorized(headers, "Invalid token.");
         }
 
         if (!Number.isInteger(storeId) || storeId <= 0) {
-            return unauthorized(headers, "Invalid store in token");
+            return unauthorized(headers, "Invalid store in token.");
         }
 
-        const storeExists = await ensureStoreExists(connection, storeId);
-
-        if (!storeExists) {
-            return badRequest(headers, "Store account not found");
+        if (!(await ensureStoreExists(connection, storeId))) {
+            return badRequest(headers, "Store account not found.");
         }
 
-        const isBranchUser = tokenRole === "manager" || tokenRole === "staff";
+        const isBranchUser =
+            tokenRole === "manager" ||
+            tokenRole === "staff";
 
-        const rawRequestedBranchId = firstDefined(body.branch_id, body.branchId);
+        const rawRequestedBranchId = firstDefined(
+            body.branch_id,
+            body.branchId
+        );
 
         const requestedBranchId =
             rawRequestedBranchId !== undefined &&
@@ -540,289 +460,41 @@ exports.handler = async (event) => {
                 ? Number(rawRequestedBranchId)
                 : null;
 
-        const activeBranchId = isBranchUser
-            ? tokenBranchId
-            : requestedBranchId || null;
+        const activeBranchId =
+            isBranchUser
+                ? tokenBranchId
+                : requestedBranchId;
 
-        if (isBranchUser && !activeBranchId) {
-            return badRequest(headers, "Missing branch_id for branch user");
+        if (
+            isBranchUser &&
+            (!Number.isInteger(activeBranchId) || activeBranchId <= 0)
+        ) {
+            return badRequest(
+                headers,
+                "Missing branch_id for branch user."
+            );
         }
 
-        if (activeBranchId) {
-            const branchOk = await ensureBranchBelongsToStore(
+        if (
+            activeBranchId &&
+            !(await ensureBranchBelongsToStore(
                 connection,
                 activeBranchId,
                 storeId
+            ))
+        ) {
+            return badRequest(
+                headers,
+                "Invalid branch for this store."
             );
-
-            if (!branchOk) {
-                return badRequest(headers, "Invalid branch for this store");
-            }
-        }
-
-        if (action === "get_products") {
-            const products = await getProducts(connection, storeId, activeBranchId);
-            return jsonResponse(200, headers, { products });
-        }
-
-        if (action === "create_product") {
-            const name = toSafeString(body.name, 120);
-            const category = toSafeString(body.category, 120);
-            const packageId = toNumber(firstDefined(body.packageId, body.package_id));
-            const packageName = toSafeString(firstDefined(body.packageName, body.package_name), 255);
-
-            const incomingVariants = getIncomingVariants(body);
-            const hasVariants =
-                parseBooleanFlag(firstDefined(body.hasVariants, body.has_variants)) ||
-                incomingVariants.length > 0;
-
-            if (!name || !category) {
-                return badRequest(headers, "name and category are required");
-            }
-
-            if (!activeBranchId) {
-                return badRequest(headers, "branch_id is required");
-            }
-
-            if (hasVariants && incomingVariants.length === 0) {
-                return badRequest(headers, "Please add at least one valid variant");
-            }
-
-            const existingProduct = await findExistingProductByName(
-                connection,
-                storeId,
-                activeBranchId,
-                name
-            );
-
-            if (existingProduct) {
-                return badRequest(
-                    headers,
-                    `Product "${name}" already exists in this branch.`
-                );
-            }
-
-            const duplicateVariantLabel = hasVariants
-                ? getDuplicateVariantLabel(incomingVariants)
-                : "";
-
-            if (duplicateVariantLabel) {
-                return badRequest(
-                    headers,
-                    `Variant "${duplicateVariantLabel}" already exists in this product.`
-                );
-            }
-
-            const stock = hasVariants
-                ? getVariantTotalStock(incomingVariants)
-                : toNumber(firstDefined(body.stock, body.quantity, body.qty)) ?? 0;
-
-            const alertLevel = hasVariants
-                ? getVariantTotalAlert(incomingVariants)
-                : toNumber(firstDefined(body.alertLevel, body.alert_level, body.alert)) ?? 0;
-
-            const originalPrice = hasVariants
-                ? getMinVariantPrice(incomingVariants, "originalPrice")
-                : toNumber(firstDefined(body.originalPrice, body.original_price, body.cost_price)) ?? 0;
-
-            const salesPrice = hasVariants
-                ? getMinVariantPrice(incomingVariants, "salesPrice")
-                : toNumber(firstDefined(body.salesPrice, body.sales_price, body.price)) ?? 0;
-
-            await connection.beginTransaction();
-
-            const [result] = await connection.execute(
-                `INSERT INTO products
-                 (store_id, branch_id, package_id, package_name, name, category, stock, alert_level, original_price, sales_price, has_variants)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    storeId,
-                    activeBranchId,
-                    packageId,
-                    packageName || null,
-                    name,
-                    category,
-                    stock,
-                    alertLevel,
-                    originalPrice,
-                    salesPrice,
-                    hasVariants ? 1 : 0,
-                ]
-            );
-
-            const productId = result.insertId;
-
-            if (hasVariants) {
-                await insertProductVariants(connection, productId, incomingVariants);
-            }
-
-            await connection.commit();
-
-            const product = await getProductById(
-                connection,
-                storeId,
-                activeBranchId,
-                productId
-            );
-
-            return jsonResponse(201, headers, {
-                success: true,
-                product,
-            });
-        }
-
-        if (action === "update_product") {
-            const id = Number(body.id);
-
-            if (!Number.isInteger(id) || id <= 0) {
-                return badRequest(headers, "Invalid product id");
-            }
-
-            const existing = await getProductById(
-                connection,
-                storeId,
-                activeBranchId,
-                id
-            );
-
-            if (!existing) {
-                return notFound(headers, "Product not found");
-            }
-
-            const name = toSafeString(body.name, 120);
-            const category = toSafeString(body.category, 120);
-            const packageId = toNumber(firstDefined(body.packageId, body.package_id));
-            const packageName = toSafeString(firstDefined(body.packageName, body.package_name), 255);
-
-            const incomingVariants = getIncomingVariants(body);
-            const hasVariants =
-                parseBooleanFlag(firstDefined(body.hasVariants, body.has_variants)) ||
-                incomingVariants.length > 0;
-
-            if (!name || !category) {
-                return badRequest(headers, "name and category are required");
-            }
-
-            if (hasVariants && incomingVariants.length === 0) {
-                return badRequest(headers, "Please add at least one valid variant");
-            }
-
-            const duplicateProduct = await findExistingProductByName(
-                connection,
-                storeId,
-                activeBranchId,
-                name,
-                id
-            );
-
-            if (duplicateProduct) {
-                return badRequest(
-                    headers,
-                    `Product "${name}" already exists in this branch.`
-                );
-            }
-
-            const duplicateVariantLabel = hasVariants
-                ? getDuplicateVariantLabel(incomingVariants)
-                : "";
-
-            if (duplicateVariantLabel) {
-                return badRequest(
-                    headers,
-                    `Variant "${duplicateVariantLabel}" already exists in this product.`
-                );
-            }
-
-            const stock = hasVariants
-                ? getVariantTotalStock(incomingVariants)
-                : toNumber(firstDefined(body.stock, body.quantity, body.qty)) ?? 0;
-
-            const alertLevel = hasVariants
-                ? getVariantTotalAlert(incomingVariants)
-                : toNumber(firstDefined(body.alertLevel, body.alert_level, body.alert)) ?? 0;
-
-            const originalPrice = hasVariants
-                ? getMinVariantPrice(incomingVariants, "originalPrice")
-                : toNumber(firstDefined(body.originalPrice, body.original_price, body.cost_price)) ?? 0;
-
-            const salesPrice = hasVariants
-                ? getMinVariantPrice(incomingVariants, "salesPrice")
-                : toNumber(firstDefined(body.salesPrice, body.sales_price, body.price)) ?? 0;
-
-            await connection.beginTransaction();
-
-            let query = `
-                UPDATE products
-                SET
-                    package_id = ?,
-                    package_name = ?,
-                    name = ?,
-                    category = ?,
-                    stock = ?,
-                    alert_level = ?,
-                    original_price = ?,
-                    sales_price = ?,
-                    has_variants = ?
-                WHERE id = ?
-                  AND store_id = ?
-            `;
-
-            const params = [
-                packageId,
-                packageName || null,
-                name,
-                category,
-                stock,
-                alertLevel,
-                originalPrice,
-                salesPrice,
-                hasVariants ? 1 : 0,
-                id,
-                storeId,
-            ];
-
-            if (activeBranchId) {
-                query += " AND branch_id = ?";
-                params.push(activeBranchId);
-            }
-
-            const [result] = await connection.execute(query, params);
-
-            if (result.affectedRows === 0) {
-                await safeRollback(connection);
-                return notFound(headers, "Product not found");
-            }
-
-            await connection.execute(
-                "DELETE FROM product_variants WHERE product_id = ?",
-                [id]
-            );
-
-            if (hasVariants) {
-                await insertProductVariants(connection, id, incomingVariants);
-            }
-
-            await connection.commit();
-
-            const product = await getProductById(
-                connection,
-                storeId,
-                activeBranchId,
-                id
-            );
-
-            return jsonResponse(200, headers, {
-                success: true,
-                product,
-            });
         }
 
         if (action === "get_packages") {
             let query = `
-        SELECT *
-        FROM packages
-        WHERE store_id = ?
-    `;
+                SELECT *
+                FROM packages
+                WHERE store_id = ?
+            `;
 
             const params = [storeId];
 
@@ -835,74 +507,241 @@ exports.handler = async (event) => {
 
             const [rows] = await connection.execute(query, params);
 
-            const packages = rows.map((row) => {
-                let inclusions = [];
-
-                try {
-                    if (Array.isArray(row.inclusions)) {
-                        inclusions = row.inclusions;
-                    } else if (typeof row.inclusions === "string" && row.inclusions.trim()) {
-                        inclusions = JSON.parse(row.inclusions);
-                    }
-                } catch {
-                    inclusions = [];
-                }
-
-                return {
-                    id: Number(row.id),
-                    store_id: Number(row.store_id),
-                    branch_id: Number(row.branch_id),
-                    name: row.name || "",
-                    description: row.description || "",
-                    original_value: Number(row.original_value || 0),
-                    discount_type: row.discount_type || "amount",
-                    discount_value: Number(row.discount_value || 0),
-                    package_price: Number(row.package_price || 0),
-                    down_payment_amount: Number(row.down_payment_amount || 0),
-                    duration: row.duration || "",
-                    status: row.status || "Active",
-                    category: row.category || undefined,
-                    cover_image: row.cover_image || "",
-                    inclusions,
-                    created_at: row.created_at || "",
-                };
+            return jsonResponse(200, headers, {
+                success: true,
+                packages: rows.map(normalizePackageRow),
             });
-
-            return jsonResponse(200, headers, { packages });
         }
 
-        if (action === "delete_product") {
-            const id = Number(body.id);
-
-            if (!Number.isInteger(id) || id <= 0) {
-                return badRequest(headers, "Invalid product id");
+        if (action === "create_package") {
+            if (!activeBranchId) {
+                return badRequest(headers, "branch_id is required.");
             }
 
-            const existing = await getProductById(
-                connection,
-                storeId,
-                activeBranchId,
-                id
+            const pkg = getIncomingPackage(body);
+            const validationError = validatePackageInput(pkg);
+
+            if (validationError) {
+                return badRequest(headers, validationError);
+            }
+
+            const [duplicates] = await connection.execute(
+                `SELECT id
+                 FROM packages
+                 WHERE store_id = ?
+                   AND branch_id = ?
+                   AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                 LIMIT 1`,
+                [storeId, activeBranchId, pkg.name]
             );
 
-            if (!existing) {
-                return notFound(headers, "Product not found");
+            if (duplicates.length > 0) {
+                return badRequest(
+                    headers,
+                    `Package "${pkg.name}" already exists in this branch.`
+                );
             }
 
             await connection.beginTransaction();
 
-            await connection.execute(
-                "DELETE FROM product_variants WHERE product_id = ?",
-                [id]
+            try {
+                const [result] = await connection.execute(
+                    `INSERT INTO packages
+                    (
+                        store_id,
+                        branch_id,
+                        name,
+                        description,
+                        original_value,
+                        discount_type,
+                        discount_value,
+                        package_price,
+                        down_payment_amount,
+                        duration,
+                        status,
+                        category,
+                        cover_image,
+                        inclusions
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        storeId,
+                        activeBranchId,
+                        pkg.name,
+                        pkg.description || null,
+                        pkg.originalValue,
+                        pkg.discountType,
+                        pkg.discountValue,
+                        pkg.packagePrice,
+                        pkg.downPaymentAmount,
+                        pkg.duration,
+                        pkg.status,
+                        pkg.category || null,
+                        pkg.coverImage || null,
+                        JSON.stringify(pkg.inclusions),
+                    ]
+                );
+
+                await connection.commit();
+
+                const createdPackage = await getPackageById(
+                    connection,
+                    storeId,
+                    activeBranchId,
+                    Number(result.insertId)
+                );
+
+                return jsonResponse(201, headers, {
+                    success: true,
+                    package: createdPackage,
+                });
+            } catch (error) {
+                await safeRollback(connection);
+                throw error;
+            }
+        }
+
+        if (action === "update_package") {
+            const packageId = Number(body.id);
+
+            if (!Number.isInteger(packageId) || packageId <= 0) {
+                return badRequest(headers, "Invalid package id.");
+            }
+
+            const existingPackage = await getPackageById(
+                connection,
+                storeId,
+                activeBranchId,
+                packageId
             );
 
+            if (!existingPackage) {
+                return notFound(headers, "Package not found.");
+            }
+
+            const pkg = getIncomingPackage(body);
+            const validationError = validatePackageInput(pkg);
+
+            if (validationError) {
+                return badRequest(headers, validationError);
+            }
+
+            const branchId =
+                activeBranchId || Number(existingPackage.branch_id);
+
+            const [duplicates] = await connection.execute(
+                `SELECT id
+                 FROM packages
+                 WHERE store_id = ?
+                   AND branch_id = ?
+                   AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                   AND id <> ?
+                 LIMIT 1`,
+                [storeId, branchId, pkg.name, packageId]
+            );
+
+            if (duplicates.length > 0) {
+                return badRequest(
+                    headers,
+                    `Package "${pkg.name}" already exists in this branch.`
+                );
+            }
+
+            await connection.beginTransaction();
+
+            try {
+                let query = `
+                    UPDATE packages
+                    SET
+                        name = ?,
+                        description = ?,
+                        original_value = ?,
+                        discount_type = ?,
+                        discount_value = ?,
+                        package_price = ?,
+                        down_payment_amount = ?,
+                        duration = ?,
+                        status = ?,
+                        category = ?,
+                        cover_image = ?,
+                        inclusions = ?
+                    WHERE id = ?
+                      AND store_id = ?
+                `;
+
+                const params = [
+                    pkg.name,
+                    pkg.description || null,
+                    pkg.originalValue,
+                    pkg.discountType,
+                    pkg.discountValue,
+                    pkg.packagePrice,
+                    pkg.downPaymentAmount,
+                    pkg.duration,
+                    pkg.status,
+                    pkg.category || null,
+                    pkg.coverImage || null,
+                    JSON.stringify(pkg.inclusions),
+                    packageId,
+                    storeId,
+                ];
+
+                if (activeBranchId) {
+                    query += " AND branch_id = ?";
+                    params.push(activeBranchId);
+                }
+
+                const [result] = await connection.execute(query, params);
+
+                if (result.affectedRows === 0) {
+                    await safeRollback(connection);
+                    return notFound(headers, "Package not found.");
+                }
+
+                await connection.commit();
+
+                const updatedPackage = await getPackageById(
+                    connection,
+                    storeId,
+                    activeBranchId,
+                    packageId
+                );
+
+                return jsonResponse(200, headers, {
+                    success: true,
+                    package: updatedPackage,
+                });
+            } catch (error) {
+                await safeRollback(connection);
+                throw error;
+            }
+        }
+
+        if (action === "delete_package") {
+            const packageId = Number(body.id);
+
+            if (!Number.isInteger(packageId) || packageId <= 0) {
+                return badRequest(headers, "Invalid package id.");
+            }
+
+            if (
+                !(await getPackageById(
+                    connection,
+                    storeId,
+                    activeBranchId,
+                    packageId
+                ))
+            ) {
+                return notFound(headers, "Package not found.");
+            }
+
             let query = `
-                DELETE FROM products
+                DELETE FROM packages
                 WHERE id = ?
                   AND store_id = ?
             `;
 
-            const params = [id, storeId];
+            const params = [packageId, storeId];
 
             if (activeBranchId) {
                 query += " AND branch_id = ?";
@@ -912,19 +751,16 @@ exports.handler = async (event) => {
             const [result] = await connection.execute(query, params);
 
             if (result.affectedRows === 0) {
-                await safeRollback(connection);
-                return notFound(headers, "Product not found");
+                return notFound(headers, "Package not found.");
             }
-
-            await connection.commit();
 
             return jsonResponse(200, headers, { success: true });
         }
 
-        return badRequest(headers, "Invalid action");
-    } catch (err) {
+        return badRequest(headers, "Invalid action.");
+    } catch (error) {
         await safeRollback(connection);
-        return serverError(headers, err);
+        return serverError(headers, error);
     } finally {
         if (connection) {
             await connection.end();

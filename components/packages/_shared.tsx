@@ -1,4 +1,4 @@
-import { CalendarDays, ChevronDown, ImagePlus, RefreshCw } from "lucide-react";
+import { CalendarDays, ChevronDown, ImagePlus, RefreshCw, Search } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -67,6 +67,7 @@ export type Product = {
     branchId?: number | null;
     branch_id?: number | null;
     name: string;
+    category?: string;
     salesPrice?: number;
     sales_price?: number;
     stock?: number;
@@ -82,6 +83,7 @@ export type PackageSelectableItem = {
     productName: string;
     variantName?: string;
     displayName: string;
+    category?: string;
     salesPrice: number;
     stock: number;
     branchId?: number | null;
@@ -272,6 +274,7 @@ export function buildPackageSelectableItems(
                     productName: product.name,
                     variantName,
                     displayName: `${product.name} — ${variantName}`,
+                    category: product.category,
                     salesPrice,
                     stock: Number(variant.stock || 0),
                     branchId: productBranchId,
@@ -287,6 +290,7 @@ export function buildPackageSelectableItems(
                 productName: product.name,
                 variantName: "",
                 displayName: product.name,
+                category: product.category,
                 salesPrice: Number(product.salesPrice ?? product.sales_price ?? 0),
                 stock: Number(product.stock || 0),
                 branchId: productBranchId,
@@ -438,6 +442,26 @@ export function PageHeader({
     );
 }
 
+function getPackageCoverImage(pkg: PackageItem) {
+    if (pkg.cover_image) {
+        return pkg.cover_image;
+    }
+
+    const packageText = `${pkg.name} ${pkg.description || ""}`.toLowerCase();
+
+    return packageText.includes("wedding")
+        ? "https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=900&q=85"
+        : packageText.includes("birthday")
+            ? "https://images.unsplash.com/photo-1530103862676-de8c9debad1d?auto=format&fit=crop&w=900&q=85"
+            : packageText.includes("graduation")
+                ? "https://images.unsplash.com/photo-1523580494863-6f3031224c94?auto=format&fit=crop&w=900&q=85"
+                : packageText.includes("christening") || packageText.includes("baby")
+                    ? "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=85"
+                    : packageText.includes("corporate")
+                        ? "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=900&q=85"
+                        : "https://images.unsplash.com/photo-1507504031003-b417219a0fde?auto=format&fit=crop&w=900&q=85";
+}
+
 export function PackageCard({
                                 pkg,
                                 featured = false,
@@ -452,27 +476,34 @@ export function PackageCard({
     onDelete: () => void;
 }) {
     const [showDetails, setShowDetails] = useState(false);
+    const [showExpandedImage, setShowExpandedImage] = useState(false);
     const inclusionCount = (pkg.inclusions || []).length;
     const packageCategory = getPackageCategory(pkg);
 
-    const packageText = `${pkg.name} ${pkg.description || ""}`.toLowerCase();
-
-    const coverImage = pkg.cover_image || (packageText.includes("wedding")
-        ? "https://images.unsplash.com/photo-1519167758481-83f550bb49b3?auto=format&fit=crop&w=900&q=85"
-        : packageText.includes("birthday")
-            ? "https://images.unsplash.com/photo-1530103862676-de8c9debad1d?auto=format&fit=crop&w=900&q=85"
-            : packageText.includes("graduation")
-                ? "https://images.unsplash.com/photo-1523580494863-6f3031224c94?auto=format&fit=crop&w=900&q=85"
-                : packageText.includes("christening") || packageText.includes("baby")
-                    ? "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=85"
-                    : packageText.includes("corporate")
-                        ? "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=900&q=85"
-                        : "https://images.unsplash.com/photo-1507504031003-b417219a0fde?auto=format&fit=crop&w=900&q=85");
+    const coverImage = getPackageCoverImage(pkg);
 
     const discountLabel =
         pkg.discount_type === "percentage"
             ? `${Number(pkg.discount_value || 0)}%`
             : peso(pkg.discount_value || 0);
+
+    const totalIncludedUnits = (pkg.inclusions || []).reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+    );
+
+    const totalInclusionValue = (pkg.inclusions || []).reduce(
+        (sum, item) => sum + Number(item.lineValue || 0),
+        0
+    );
+
+    const regularInclusionCount = (pkg.inclusions || []).filter(
+        (item) => !item.variantId
+    ).length;
+
+    const variantInclusionCount = (pkg.inclusions || []).filter(
+        (item) => Boolean(item.variantId)
+    ).length;
 
     const openDetails = () => setShowDetails(true);
 
@@ -541,38 +572,15 @@ export function PackageCard({
                                 className="h-3.5 w-3.5"
                                 aria-hidden="true"
                             >
-                                <rect x="4" y="7" width="16" height="13" rx="2" />
-                                <path d="M4 11h16" />
-                                <path d="M9 4v5" />
-                                <path d="M15 4v5" />
+                                <path d="M4 7.5h7l2 2H20v8.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7.5Z" />
+                                <path d="M4 7.5V6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1.5" />
                             </svg>
-                            <span>
-                                {inclusionCount}{" "}
-                                {inclusionCount === 1 ? "Item" : "Items"}
-                            </span>
+                            <span>{packageCategory}</span>
                         </div>
 
-                        <div className="flex items-center gap-1.5 text-xs text-[#7A6A84]">
-                            <svg
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                className="h-3.5 w-3.5"
-                                aria-hidden="true"
-                            >
-                                <circle cx="12" cy="12" r="8.5" />
-                                <path d="M12 7.5v4.8l3.1 1.9" />
-                            </svg>
-                            <span>{pkg.duration || "N/A"}</span>
-                        </div>
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between border-t border-[#EFE7F4] pt-3">
-                        <span className="text-xs font-semibold text-[#2B174C] transition group-hover:translate-x-0.5">
-                            View details →
-                        </span>
-
+                    <div className="mt-3 flex items-center justify-end border-t border-[#EFE7F4] pt-3">
                         {canManage ? (
                             <div className="flex gap-3">
                                 <button
@@ -608,137 +616,269 @@ export function PackageCard({
 
             {showDetails && (
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6 backdrop-blur-sm"
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm"
                     role="dialog"
                     aria-modal="true"
                     aria-label={`${pkg.name} package details`}
                     onClick={() => setShowDetails(false)}
                 >
                     <div
-                        className="max-h-[90vh] w-full max-w-[620px] overflow-y-auto rounded-[18px] border border-[#E6DDF0] bg-white shadow-2xl"
+                        className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[22px] border border-[#E6DDF0] bg-white shadow-[0_24px_80px_rgba(20,10,35,0.28)]"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="relative h-[190px] overflow-hidden bg-[#2D1B4E]">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                                src={coverImage}
-                                alt={`${pkg.name} package cover`}
-                                className="h-full w-full object-cover"
-                            />
-                            <div className="absolute inset-0 bg-gradient-to-t from-[#160C27]/80 to-transparent" />
+                        <div className="relative shrink-0 overflow-hidden bg-[#2D1B4E]">
+                            <button
+                                type="button"
+                                onClick={() => setShowExpandedImage(true)}
+                                className="group/image block h-[280px] w-full cursor-zoom-in overflow-hidden text-left"
+                                aria-label="Expand package cover image"
+                                title="Click to enlarge image"
+                            >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                    src={coverImage}
+                                    alt={`${pkg.name} package cover`}
+                                    className="h-full w-full object-cover transition duration-300 group-hover/image:scale-[1.02]"
+                                />
+                                <div className="absolute inset-0 bg-gradient-to-t from-[#160C27]/85 via-[#160C27]/15 to-transparent" />
+
+                                <span className="absolute right-5 top-5 rounded-full bg-black/45 px-3 py-1.5 text-[11px] font-semibold text-white backdrop-blur-sm transition group-hover/image:bg-black/60">
+                                    Click image to expand
+                                </span>
+                            </button>
 
                             <button
                                 type="button"
                                 onClick={() => setShowDetails(false)}
-                                className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-xl bg-white/95 text-base font-semibold text-[#2B174C] shadow-sm hover:bg-white"
+                                className="absolute left-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-lg font-semibold text-[#2B174C] shadow-md transition hover:scale-105 hover:bg-white"
                                 aria-label="Close package details"
                             >
                                 ×
                             </button>
 
-                            <div className="absolute bottom-4 left-5 right-5">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-white/75">
+                            <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-6">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/75">
                                     Package details
                                 </p>
-                                <h2 className="mt-1 text-[24px] font-bold text-white">
+                                <h2 className="mt-1 max-w-[820px] text-[28px] font-bold leading-tight text-white">
                                     {pkg.name}
                                 </h2>
                             </div>
                         </div>
 
-                        <div className="p-5">
-                            <div className="grid gap-3 sm:grid-cols-2">
-                                <DetailBox
-                                    label="Package Price"
-                                    value={peso(pkg.package_price)}
-                                    strong
-                                />
-                                <DetailBox
-                                    label="Down Payment"
-                                    value={peso(pkg.down_payment_amount || 0)}
-                                />
-                                <DetailBox
-                                    label="Original Value"
-                                    value={peso(pkg.original_value || 0)}
-                                />
-                                <DetailBox
-                                    label="Discount"
-                                    value={discountLabel}
-                                />
-                                <DetailBox
-                                    label="Duration"
-                                    value={pkg.duration || "N/A"}
-                                />
-                                <DetailBox
-                                    label="Category"
-                                    value={packageCategory}
-                                />
-                                <DetailBox
-                                    label="Included Items"
-                                    value={`${inclusionCount} ${
-                                        inclusionCount === 1 ? "item" : "items"
-                                    }`}
-                                />
-                            </div>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                            <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                                <div className="min-w-0 space-y-5">
+                                    <section>
+                                        <h3 className="text-sm font-bold text-[#1A1220]">
+                                            Package Information
+                                        </h3>
 
-                            <div className="mt-5">
-                                <h3 className="text-sm font-bold text-[#1A1220]">
-                                    Description
-                                </h3>
-                                <p className="mt-1 text-sm leading-6 text-[#7A6A84]">
-                                    {pkg.description || "No description provided."}
-                                </p>
-                            </div>
+                                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                            <DetailBox
+                                                label="Package Price"
+                                                value={peso(pkg.package_price)}
+                                                strong
+                                            />
+                                            <DetailBox
+                                                label="Down Payment"
+                                                value={peso(pkg.down_payment_amount || 0)}
+                                            />
+                                            <DetailBox
+                                                label="Original Value"
+                                                value={peso(pkg.original_value || 0)}
+                                            />
+                                            <DetailBox
+                                                label="Discount"
+                                                value={discountLabel}
+                                            />
+                                            <DetailBox
+                                                label="Category"
+                                                value={packageCategory}
+                                            />
+                                        </div>
+                                    </section>
 
-                            <div className="mt-5">
-                                <h3 className="text-sm font-bold text-[#1A1220]">
-                                    Package Inclusions
-                                </h3>
-
-                                <div className="mt-2 space-y-2">
-                                    {inclusionCount === 0 ? (
-                                        <p className="rounded-xl border border-dashed border-[#E6DDF0] bg-[#FFFCF7] px-3 py-3 text-sm text-[#7A6A84]">
-                                            No inclusions listed.
+                                    <section className="rounded-[16px] border border-[#EAE1EF] bg-[#FFFCF8] p-4">
+                                        <h3 className="text-sm font-bold text-[#1A1220]">
+                                            Description
+                                        </h3>
+                                        <p className="mt-2 text-sm leading-6 text-[#74657D]">
+                                            {pkg.description || "No description provided."}
                                         </p>
-                                    ) : (
-                                        (pkg.inclusions || []).map((item) => (
-                                            <div
-                                                key={getInclusionKey(item)}
-                                                className="flex items-center justify-between gap-3 rounded-xl border border-[#E6DDF0] bg-[#FFFCF7] px-3 py-2.5"
-                                            >
-                                                <div>
-                                                    <p className="text-sm font-semibold text-[#1A1220]">
-                                                        {item.productName}
-                                                    </p>
-                                                    <p className="mt-0.5 text-xs text-[#7A6A84]">
-                                                        {peso(item.unitSalesPrice)} each
-                                                    </p>
-                                                </div>
+                                    </section>
 
-                                                <div className="text-right">
-                                                    <p className="text-sm font-bold text-[#2B174C]">
-                                                        × {item.quantity}
-                                                    </p>
-                                                    <p className="mt-0.5 text-xs text-[#7A6A84]">
-                                                        {peso(item.lineValue)}
-                                                    </p>
-                                                </div>
+                                    <section className="rounded-[16px] border border-[#EAE1EF] bg-white p-4">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-[#1A1220]">
+                                                    Inclusion Summary
+                                                </h3>
+                                                <p className="mt-1 text-xs text-[#84738D]">
+                                                    Quick summary of everything included in this package.
+                                                </p>
                                             </div>
-                                        ))
-                                    )}
+
+                                            <span className="rounded-full bg-[#EFE8F8] px-3 py-1 text-xs font-bold text-[#4E2C66]">
+                                                {inclusionCount} {inclusionCount === 1 ? "item" : "items"}
+                                            </span>
+                                        </div>
+
+                                        <div className="mt-4 grid grid-cols-2 gap-3">
+                                            <DetailBox
+                                                label="Included Units"
+                                                value={`${totalIncludedUnits} units`}
+                                            />
+                                            <DetailBox
+                                                label="Inclusion Value"
+                                                value={peso(totalInclusionValue)}
+                                                strong
+                                            />
+                                            <DetailBox
+                                                label="Regular Products"
+                                                value={`${regularInclusionCount}`}
+                                            />
+                                            <DetailBox
+                                                label="Variants"
+                                                value={`${variantInclusionCount}`}
+                                            />
+                                        </div>
+                                    </section>
+                                </div>
+
+                                <div className="min-w-0">
+                                    <section className="rounded-[18px] border border-[#E6DDF0] bg-[#FBF8FD] p-4">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-[#1A1220]">
+                                                    Package Inclusions
+                                                </h3>
+                                                <p className="mt-1 text-xs text-[#84738D]">
+                                                    Items included in this package.
+                                                </p>
+                                            </div>
+
+                                            <span className="shrink-0 rounded-full bg-[#EEE5F8] px-3 py-1 text-xs font-bold text-[#4E2C66]">
+                                                {inclusionCount} {inclusionCount === 1 ? "item" : "items"}
+                                            </span>
+                                        </div>
+
+                                        <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                                            {inclusionCount === 0 ? (
+                                                <p className="rounded-xl border border-dashed border-[#DCCFE6] bg-white px-4 py-8 text-center text-sm text-[#7A6A84]">
+                                                    No inclusions listed.
+                                                </p>
+                                            ) : (
+                                                (pkg.inclusions || []).map((item) => (
+                                                    <div
+                                                        key={getInclusionKey(item)}
+                                                        className="rounded-[14px] border border-[#E6DDF0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(43,23,76,0.03)]"
+                                                    >
+                                                        <div className="flex items-start justify-between gap-4">
+                                                            <div className="min-w-0">
+                                                                <p className="break-words text-sm font-semibold leading-5 text-[#1A1220]">
+                                                                    {item.productName}
+                                                                </p>
+
+                                                                {item.variantName ? (
+                                                                    <p className="mt-1 break-words text-xs text-[#806F89]">
+                                                                        {item.variantName}
+                                                                    </p>
+                                                                ) : null}
+
+                                                                <p className="mt-1.5 text-xs text-[#7A6A84]">
+                                                                    {peso(item.unitSalesPrice)} each
+                                                                </p>
+                                                            </div>
+
+                                                            <div className="shrink-0 text-right">
+                                                                <p className="text-sm font-bold text-[#2B174C]">
+                                                                    × {item.quantity}
+                                                                </p>
+                                                                <p className="mt-1 text-xs font-semibold text-[#7A6A84]">
+                                                                    {peso(item.lineValue)}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </section>
                                 </div>
                             </div>
+                        </div>
 
-                            <div className="mt-5 flex justify-end">
+                        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[#E8DFED] bg-white px-6 py-4">
+                            <p className="text-xs text-[#8A7A91]">
+                                Click the cover image above to view it in full size.
+                            </p>
+
+                            {canManage ? (
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowDetails(false);
+                                            onEdit();
+                                        }}
+                                        className="rounded-xl border border-[#DCCFE6] bg-white px-5 py-2.5 text-sm font-semibold text-[#2B174C] shadow-sm transition hover:bg-[#F7F1FF]"
+                                    >
+                                        Edit
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowDetails(false);
+                                            onDelete();
+                                        }}
+                                        className="rounded-xl bg-red-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-red-600"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            ) : (
                                 <button
                                     type="button"
                                     onClick={() => setShowDetails(false)}
-                                    className="rounded-xl bg-[#2B174C] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#1B0D31]"
+                                    className="rounded-xl bg-[#2B174C] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1B0D31]"
                                 >
                                     Close
                                 </button>
-                            </div>
+                            )}
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {showExpandedImage && (
+                <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={`${pkg.name} enlarged cover image`}
+                    onClick={() => setShowExpandedImage(false)}
+                >
+                    <div
+                        className="relative flex max-h-[94vh] max-w-[94vw] items-center justify-center"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src={coverImage}
+                            alt={`${pkg.name} enlarged package cover`}
+                            className="max-h-[90vh] max-w-[90vw] rounded-[18px] object-contain shadow-2xl"
+                        />
+
+                        <button
+                            type="button"
+                            onClick={() => setShowExpandedImage(false)}
+                            className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-lg font-semibold text-[#2B174C] shadow-md transition hover:scale-105 hover:bg-white"
+                            aria-label="Close enlarged image"
+                        >
+                            ×
+                        </button>
                     </div>
                 </div>
             )}
@@ -756,7 +896,7 @@ function DetailBox({
     strong?: boolean;
 }) {
     return (
-        <div className="rounded-xl border border-[#E6DDF0] bg-[#FFFCF7] px-3 py-2.5">
+        <div className="rounded-[14px] border border-[#E6DDF0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(43,23,76,0.03)]">
             <p className="text-xs font-semibold text-[#806A8C]">{label}</p>
             <p
                 className={`mt-1 text-sm ${
@@ -807,6 +947,7 @@ export function PackageFormModal({
                                      originalValue,
                                      packagePrice,
                                      onAddInclusion,
+                                     onAdjustInclusion,
                                      onRemoveInclusion,
                                      onSubmit,
                                      onClose,
@@ -843,6 +984,7 @@ export function PackageFormModal({
     originalValue: number;
     packagePrice: number;
     onAddInclusion: () => void;
+    onAdjustInclusion: (product: PackageSelectableItem, delta: number) => void;
     onRemoveInclusion: (key: string) => void;
     onSubmit: (event: FormEvent<HTMLFormElement>) => void;
     onClose: () => void;
@@ -860,9 +1002,34 @@ export function PackageFormModal({
         (option) => option !== "All"
     ) as PackageFormCategory[];
 
+    const [inclusionSearch, setInclusionSearch] = useState("");
+    const [showFormImagePreview, setShowFormImagePreview] = useState(false);
+
+    const filteredInclusionProducts = products.filter((product) => {
+        const query = inclusionSearch.trim().toLowerCase();
+
+        if (!query) return true;
+
+        return [
+            product.displayName,
+            product.productName,
+            product.variantName,
+            product.category,
+        ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+    });
+
+    const getSelectedQuantity = (key: string) =>
+        inclusions.find(
+            (item) => getInclusionKey(item) === key
+        )?.quantity || 0;
+
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6 backdrop-blur-sm">
-            <div className="max-h-[90vh] w-full max-w-[760px] overflow-y-auto rounded-[14px] border border-[#E6DDF0] bg-white p-5 shadow-2xl">
+            <div className="max-h-[92vh] w-full max-w-[1460px] overflow-y-auto rounded-[18px] border border-[#E6DDF0] bg-white p-5 shadow-2xl">
                 <div className="mb-4 flex items-start justify-between gap-4">
                     <div>
                         <h2 className="text-[19px] font-bold text-[#1A1220]">
@@ -893,7 +1060,7 @@ export function PackageFormModal({
                         </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(220px,0.7fr)_minmax(220px,0.7fr)] gap-3">
                         <Field label="Package Name">
                             <input
                                 value={name}
@@ -913,20 +1080,7 @@ export function PackageFormModal({
                                 className={fieldClass}
                             />
                         </Field>
-                    </div>
 
-                    <Field label="Description">
-                        <textarea
-                            value={description}
-                            onChange={(event) =>
-                                setDescription(event.target.value)
-                            }
-                            placeholder="Short package details or notes"
-                            className={`${fieldClass} min-h-[82px] resize-none py-2`}
-                        />
-                    </Field>
-
-                    <div className="grid grid-cols-2 gap-3">
                         <Field label="Category">
                             <select
                                 value={category}
@@ -944,148 +1098,434 @@ export function PackageFormModal({
                                 ))}
                             </select>
                         </Field>
+                    </div>
 
-                        <div>
+                    <div className="grid grid-cols-2 items-stretch gap-3">
+                        <Field label="Description">
+                            <textarea
+                                value={description}
+                                onChange={(event) =>
+                                    setDescription(event.target.value)
+                                }
+                                placeholder="Short package details or notes"
+                                className={`${fieldClass} h-[150px] resize-none py-3`}
+                            />
+                        </Field>
+
+                        <div className="flex h-full flex-col">
                             <span className="mb-1 block text-xs font-semibold text-[#806A8C]">
                                 Package Picture
                             </span>
 
-                            <label className="flex min-h-[44px] cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#D9CBE6] bg-[#FFFCF7] px-4 py-2.5 text-sm font-semibold text-[#2B174C] transition hover:border-[#2B174C] hover:bg-[#F7F1FF]">
-                                <ImagePlus size={16} />
-                                {coverImage ? "Change picture" : "Upload picture"}
+                            {!coverImage ? (
+                                <label className="flex h-[150px] cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#D9CBE6] bg-[#FFFCF7] px-4 py-3 text-sm font-semibold text-[#2B174C] transition hover:border-[#2B174C] hover:bg-[#F7F1FF]">
+                                    <ImagePlus size={18} />
+                                    Upload picture
 
-                                <input
-                                    type="file"
-                                    accept="image/png,image/jpeg,image/webp"
-                                    className="sr-only"
-                                    onChange={(event) =>
-                                        onCoverImageChange(
-                                            event.target.files?.[0] || null
-                                        )
-                                    }
-                                />
-                            </label>
+                                    <input
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/webp"
+                                        className="sr-only"
+                                        onChange={(event) =>
+                                            onCoverImageChange(
+                                                event.target.files?.[0] || null
+                                            )
+                                        }
+                                    />
+                                </label>
+                            ) : (
+                                <div className="flex h-[150px] items-stretch gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setShowFormImagePreview(true)
+                                        }
+                                        className="group relative min-w-0 flex-1 cursor-zoom-in overflow-hidden rounded-xl border border-[#D9CBE6] bg-[#F7F1FF]"
+                                        aria-label="Expand package picture"
+                                        title="Click picture to expand"
+                                    >
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img
+                                            src={coverImage}
+                                            alt="Selected package cover preview"
+                                            className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                                        />
+
+                                        <span className="absolute bottom-2 right-2 rounded-full bg-black/55 px-2 py-1 text-[10px] font-semibold text-white backdrop-blur-sm">
+                                            Click to expand
+                                        </span>
+                                    </button>
+
+                                    <div className="flex w-11 shrink-0 flex-col gap-2">
+                                        <label
+                                            className="flex flex-1 cursor-pointer items-center justify-center rounded-xl border border-[#D9CBE6] bg-white text-[#2B174C] transition hover:bg-[#F7F1FF]"
+                                            title="Replace picture"
+                                            aria-label="Replace package picture"
+                                        >
+                                            <ImagePlus size={16} />
+
+                                            <input
+                                                type="file"
+                                                accept="image/png,image/jpeg,image/webp"
+                                                className="sr-only"
+                                                onChange={(event) =>
+                                                    onCoverImageChange(
+                                                        event.target.files?.[0] ||
+                                                        null
+                                                    )
+                                                }
+                                            />
+                                        </label>
+
+                                        <button
+                                            type="button"
+                                            onClick={onRemoveCoverImage}
+                                            className="flex flex-1 items-center justify-center rounded-xl border border-red-200 bg-white text-red-500 transition hover:bg-red-50"
+                                            title="Remove picture"
+                                            aria-label="Remove package picture"
+                                        >
+                                            <svg
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2"
+                                                className="h-4 w-4"
+                                                aria-hidden="true"
+                                            >
+                                                <path d="M4 7h16" />
+                                                <path d="M9 7V4h6v3" />
+                                                <path d="M7 7l1 13h8l1-13" />
+                                                <path d="M10 11v5M14 11v5" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
 
                             <p className="mt-1 text-[11px] text-[#7A6A84]">
-                                JPG, PNG, or WEBP. Maximum file size: 2 MB.
+                                {coverImage
+                                    ? "Click the picture to expand. Use the side buttons to replace or remove it."
+                                    : "JPG, PNG, or WEBP. Maximum file size: 2 MB."}
                             </p>
                         </div>
                     </div>
 
-                    {coverImage && (
-                        <div className="overflow-hidden rounded-xl border border-[#E6DDF0] bg-[#FFFCF7]">
-                            <div className="flex h-52 items-center justify-center bg-[#F7F1FF] p-2">
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                    src={coverImage}
-                                    alt="Selected package cover preview"
-                                    className="h-full w-full rounded-lg object-contain"
-                                />
-                            </div>
-
-                            <div className="flex items-center justify-between gap-4 border-t border-[#E6DDF0] px-3 py-2.5">
+                    <Card className="overflow-hidden bg-white p-0">
+                        <div className="border-b border-[#EAE1EF] px-4 py-3">
+                            <div className="flex items-center justify-between gap-4">
                                 <div>
-                                    <p className="text-sm font-semibold text-[#1A1220]">
-                                        Package picture selected
-                                    </p>
+                                    <h3 className="text-[16px] font-bold text-[#1A1220]">
+                                        Package Inclusions
+                                    </h3>
                                     <p className="mt-0.5 text-xs text-[#7A6A84]">
-                                        This larger preview is the picture that will be used for the package cover.
+                                        Choose inventory items and set the quantity included in this package.
                                     </p>
                                 </div>
 
-                                <button
-                                    type="button"
-                                    onClick={onRemoveCoverImage}
-                                    className="shrink-0 text-xs font-semibold text-red-500 hover:underline"
-                                >
-                                    Remove
-                                </button>
+                                <span className="rounded-full bg-[#EFE8F8] px-3 py-1 text-xs font-bold text-[#4E2C66]">
+                                    {inclusions.length} selected
+                                </span>
                             </div>
                         </div>
-                    )}
 
-                    <Card className="bg-[#FDFAF4]">
-                        <CardHeader title="Package Inclusions" />
+                        <div className="grid min-h-[430px] lg:grid-cols-[minmax(0,1fr)_500px]">
+                            <div className="min-w-0 border-b border-[#EAE1EF] lg:border-b-0 lg:border-r">
+                                <div className="p-3">
+                                    <div className="relative">
+                                        <Search
+                                            size={15}
+                                            className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9B8AAA]"
+                                        />
+                                        <input
+                                            value={inclusionSearch}
+                                            onChange={(event) =>
+                                                setInclusionSearch(event.target.value)
+                                            }
+                                            placeholder="Search items or variants..."
+                                            className="w-full rounded-xl border border-[#E3D8EA] bg-white px-4 py-2.5 pl-10 text-sm text-[#1A1220] outline-none shadow-sm placeholder:text-[#9B8AAA] focus:border-[#2B174C]"
+                                        />
+                                    </div>
+                                </div>
 
-                        <div className="grid grid-cols-[1.7fr_0.65fr_0.55fr] gap-2">
-                            <select
-                                value={selectedProductId}
-                                onChange={(event) =>
-                                    setSelectedProductId(event.target.value)
-                                }
-                                className={fieldClass}
-                            >
-                                <option value="">Select product or variant</option>
+                                <div className="h-[470px] overflow-y-auto overflow-x-hidden">
+                                    <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,2.1fr)_minmax(95px,0.55fr)_70px_95px_minmax(135px,0.75fr)] border-y border-[#EAE1EF] bg-[#FCFAFD] px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.05em] text-[#806A8C]">
+                                        <span>Product</span>
+                                        <span>Category</span>
+                                        <span className="text-center">Stock</span>
+                                        <span className="text-right">Price</span>
+                                        <span className="text-center">Qty / Action</span>
+                                    </div>
 
-                                {products.map((product) => (
-                                    <option
-                                        key={product.key}
-                                        value={product.key}
-                                        disabled={product.stock <= 0}
-                                    >
-                                        {product.displayName} — {peso(product.salesPrice)} —{" "}
-                                        {product.stock <= 0
-                                            ? "Unavailable"
-                                            : `Stock: ${product.stock}`}
-                                    </option>
-                                ))}
-                            </select>
+                                    {filteredInclusionProducts.length === 0 ? (
+                                        <div className="px-4 py-10 text-center text-sm text-[#8A7A91]">
+                                            No products or variants match your search.
+                                        </div>
+                                    ) : (
+                                        filteredInclusionProducts.map((product) => {
+                                            const selectedQty =
+                                                getSelectedQuantity(product.key);
 
-                            <input
-                                type="number"
-                                min="1"
-                                value={inclusionQty}
-                                onChange={(event) =>
-                                    setInclusionQty(event.target.value)
-                                }
-                                placeholder="Qty"
-                                className={fieldClass}
-                            />
+                                            return (
+                                                <div
+                                                    key={product.key}
+                                                    className="grid grid-cols-[minmax(0,2.1fr)_minmax(95px,0.55fr)_70px_95px_minmax(135px,0.75fr)] items-center border-b border-[#EFE8F2] px-4 py-3 last:border-0"
+                                                >
+                                                    <div className="min-w-0 pr-3">
+                                                        <p className="truncate text-sm font-semibold text-[#1A1220]">
+                                                            {product.productName}
+                                                        </p>
+                                                        <p className="mt-0.5 truncate text-xs text-[#806F89]">
+                                                            {product.variantName || "Regular product"}
+                                                        </p>
+                                                    </div>
 
-                            <button
-                                type="button"
-                                onClick={onAddInclusion}
-                                className="rounded-xl bg-[#2B174C] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1B0D31]"
-                            >
-                                Add
-                            </button>
-                        </div>
+                                                    <p className="truncate pr-2 text-xs text-[#6D5B78]">
+                                                        {product.category || "Uncategorized"}
+                                                    </p>
 
-                        <div className="mt-3 space-y-2">
-                            {inclusions.length === 0 ? (
-                                <p className="rounded-xl border border-dashed border-[#E6DDF0] bg-white px-3 py-4 text-center text-xs text-[#7A6A84]">
-                                    No inclusions added yet.
-                                </p>
-                            ) : (
-                                inclusions.map((item) => (
-                                    <div
-                                        key={getInclusionKey(item)}
-                                        className="flex items-center justify-between rounded-xl border border-[#E6DDF0] bg-white px-3 py-2.5"
-                                    >
-                                        <div>
-                                            <p className="text-sm font-semibold text-[#1A1220]">
-                                                {item.productName} ×{" "}
-                                                {item.quantity}
+                                                    <p
+                                                        className={`text-center text-sm font-bold tabular-nums ${
+                                                            product.stock <= 0
+                                                                ? "text-red-500"
+                                                                : "text-[#1A1220]"
+                                                        }`}
+                                                    >
+                                                        {product.stock}
+                                                    </p>
+
+                                                    <p className="text-right text-sm font-bold tabular-nums text-[#1A1220]">
+                                                        {peso(product.salesPrice)}
+                                                    </p>
+
+                                                    <div className="flex items-center justify-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            disabled={selectedQty <= 0}
+                                                            onClick={() =>
+                                                                onAdjustInclusion(product, -1)
+                                                            }
+                                                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E6DDF0] bg-white text-base font-semibold text-[#2B174C] transition hover:bg-[#F7F1FF] disabled:cursor-not-allowed disabled:opacity-40"
+                                                        >
+                                                            −
+                                                        </button>
+
+                                                        <span className="min-w-6 text-center text-sm font-bold tabular-nums text-[#1A1220]">
+                                                            {selectedQty}
+                                                        </span>
+
+                                                        <button
+                                                            type="button"
+                                                            disabled={
+                                                                product.stock <= 0 ||
+                                                                selectedQty >= product.stock
+                                                            }
+                                                            onClick={() =>
+                                                                onAdjustInclusion(product, 1)
+                                                            }
+                                                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#E6DDF0] bg-white text-base font-semibold text-[#2B174C] transition hover:bg-[#F7F1FF] disabled:cursor-not-allowed disabled:opacity-40"
+                                                        >
+                                                            +
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            </div>
+
+                            <aside className="flex h-[547px] min-w-0 flex-col overflow-x-hidden bg-white p-4">
+                                <div className="flex items-center justify-between border-b border-[#EAE1EF] pb-3">
+                                    <h4 className="text-[18px] font-bold text-[#1A1220]">
+                                        Current Inclusion
+                                    </h4>
+
+                                    {inclusions.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                inclusions.forEach((item) =>
+                                                    onRemoveInclusion(
+                                                        getInclusionKey(item)
+                                                    )
+                                                );
+                                            }}
+                                            className="flex h-8 w-8 items-center justify-center rounded-lg text-red-500 transition hover:bg-red-50"
+                                            aria-label="Clear current inclusions"
+                                            title="Clear all"
+                                        >
+                                            <svg
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="2"
+                                                className="h-4 w-4"
+                                                aria-hidden="true"
+                                            >
+                                                <path d="M4 7h16" />
+                                                <path d="M9 7V4h6v3" />
+                                                <path d="M7 7l1 13h8l1-13" />
+                                                <path d="M10 11v5M14 11v5" />
+                                            </svg>
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div className="mt-3 grid min-w-0 grid-cols-[minmax(0,1fr)_92px_82px_88px_18px] items-center gap-2 px-1 pb-2 text-[10px] font-semibold text-[#6D5B78]">
+                                    <span>Item</span>
+                                    <span className="text-center">Qty</span>
+                                    <span className="text-right">Unit Price</span>
+                                    <span className="text-right">Subtotal</span>
+                                    <span />
+                                </div>
+
+                                <div className="h-[380px] overflow-y-auto overflow-x-hidden pr-1">
+                                    {inclusions.length === 0 ? (
+                                        <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[#E6DDF0] bg-[#FFFDF8] px-4 text-center">
+                                            <p className="text-sm text-[#A28FAF]">
+                                                No items added yet.
                                             </p>
+                                        </div>
+                                    ) : (
+                                        <div className="divide-y divide-[#EFE8F2]">
+                                            {inclusions.map((item) => {
+                                                const matchingProduct =
+                                                    products.find(
+                                                        (product) =>
+                                                            product.key ===
+                                                            getInclusionKey(item)
+                                                    );
 
-                                            <p className="mt-0.5 text-xs text-[#7A6A84]">
-                                                {peso(item.unitSalesPrice)} each ·{" "}
-                                                {peso(item.lineValue)} total
+                                                return (
+                                                    <div
+                                                        key={getInclusionKey(item)}
+                                                        className="grid grid-cols-[minmax(0,1fr)_92px_82px_88px_18px] items-center gap-2 px-1 py-3"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <p
+                                                                className="truncate text-xs font-semibold text-[#1A1220]"
+                                                                title={item.productName}
+                                                            >
+                                                                {item.productName}
+                                                            </p>
+
+                                                            {item.variantName ? (
+                                                                <p className="mt-0.5 truncate text-[10px] text-[#806F89]">
+                                                                    {item.variantName}
+                                                                </p>
+                                                            ) : null}
+                                                        </div>
+
+                                                        <div className="flex items-center justify-center gap-1">
+                                                            <button
+                                                                type="button"
+                                                                disabled={!matchingProduct}
+                                                                onClick={() => {
+                                                                    if (matchingProduct) {
+                                                                        onAdjustInclusion(
+                                                                            matchingProduct,
+                                                                            -1
+                                                                        );
+                                                                    }
+                                                                }}
+                                                                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#E6DDF0] bg-white text-sm text-[#2B174C] transition hover:bg-[#F7F1FF] disabled:cursor-not-allowed disabled:opacity-40"
+                                                                aria-label={`Decrease ${item.productName}`}
+                                                            >
+                                                                −
+                                                            </button>
+
+                                                            <span className="min-w-5 text-center text-xs font-bold tabular-nums text-[#2B174C]">
+                                                                {item.quantity}
+                                                            </span>
+
+                                                            <button
+                                                                type="button"
+                                                                disabled={
+                                                                    !matchingProduct ||
+                                                                    item.quantity >=
+                                                                    Number(
+                                                                        matchingProduct?.stock ||
+                                                                        0
+                                                                    )
+                                                                }
+                                                                onClick={() => {
+                                                                    if (matchingProduct) {
+                                                                        onAdjustInclusion(
+                                                                            matchingProduct,
+                                                                            1
+                                                                        );
+                                                                    }
+                                                                }}
+                                                                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#E6DDF0] bg-white text-sm text-[#2B174C] transition hover:bg-[#F7F1FF] disabled:cursor-not-allowed disabled:opacity-40"
+                                                                aria-label={`Increase ${item.productName}`}
+                                                            >
+                                                                +
+                                                            </button>
+                                                        </div>
+
+                                                        <p className="text-right text-xs font-semibold tabular-nums text-[#1A1220]">
+                                                            {peso(item.unitSalesPrice)}
+                                                        </p>
+
+                                                        <p className="text-right text-xs font-semibold tabular-nums text-[#1A1220]">
+                                                            {peso(item.lineValue)}
+                                                        </p>
+
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                onRemoveInclusion(
+                                                                    getInclusionKey(item)
+                                                                )
+                                                            }
+                                                            className="flex h-6 w-6 items-center justify-center text-sm text-[#7A6A84] transition hover:text-red-500"
+                                                            aria-label={`Remove ${item.productName}`}
+                                                            title="Remove"
+                                                        >
+                                                            ×
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-3 border-t border-dashed border-[#DCCFE6] pt-4">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[16px] font-bold text-[#1A1220]">
+                                            Total
+                                        </span>
+
+                                        <span className="text-[20px] font-bold tabular-nums text-[#1A1220]">
+                                            {peso(originalValue)}
+                                        </span>
+                                    </div>
+
+                                    <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-[#7A6A84]">
+                                        <div className="rounded-lg bg-[#FAF7FC] px-3 py-2">
+                                            <span>Selected Items</span>
+                                            <p className="mt-0.5 text-sm font-bold text-[#2B174C]">
+                                                {inclusions.length}
                                             </p>
                                         </div>
 
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                onRemoveInclusion(getInclusionKey(item))
-                                            }
-                                            className="text-xs font-semibold text-red-500 hover:underline"
-                                        >
-                                            Remove
-                                        </button>
+                                        <div className="rounded-lg bg-[#FAF7FC] px-3 py-2">
+                                            <span>Total Units</span>
+                                            <p className="mt-0.5 text-sm font-bold text-[#2B174C]">
+                                                {inclusions.reduce(
+                                                    (sum, item) =>
+                                                        sum +
+                                                        Number(
+                                                            item.quantity || 0
+                                                        ),
+                                                    0
+                                                )}
+                                            </p>
+                                        </div>
                                     </div>
-                                ))
-                            )}
+                                </div>
+                            </aside>
                         </div>
                     </Card>
 
@@ -1222,6 +1662,37 @@ export function PackageFormModal({
                     </button>
                 </form>
             </div>
+
+            {showFormImagePreview && coverImage && (
+                <div
+                    className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Expanded package picture"
+                    onClick={() => setShowFormImagePreview(false)}
+                >
+                    <div
+                        className="relative flex max-h-[94vh] max-w-[94vw] items-center justify-center"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src={coverImage}
+                            alt="Expanded package cover"
+                            className="max-h-[90vh] max-w-[90vw] rounded-[18px] object-contain shadow-2xl"
+                        />
+
+                        <button
+                            type="button"
+                            onClick={() => setShowFormImagePreview(false)}
+                            className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-lg font-semibold text-[#2B174C] shadow-md transition hover:scale-105 hover:bg-white"
+                            aria-label="Close expanded package picture"
+                        >
+                            ×
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -1300,7 +1771,7 @@ export function usePackageForm(
         setName(pkg.name);
         setDescription(pkg.description || "");
         setCategory(pkg.category || getPackageCategory(pkg));
-        setCoverImage(pkg.cover_image || "");
+        setCoverImage(getPackageCoverImage(pkg));
         setDuration(pkg.duration || "");
         setStatus(pkg.status);
 
@@ -1417,6 +1888,78 @@ export function usePackageForm(
         setSelectedProductId("");
         setInclusionQty("");
         setError("");
+    }
+
+    function adjustInclusion(
+        product: PackageSelectableItem,
+        delta: number
+    ) {
+        if (!Number.isFinite(delta) || delta === 0) {
+            return;
+        }
+
+        setInclusions((previous) => {
+            const existing = previous.find(
+                (item) =>
+                    getInclusionKey(item) === product.key
+            );
+
+            const currentQuantity =
+                existing?.quantity || 0;
+
+            const nextQuantity =
+                currentQuantity + delta;
+
+            if (nextQuantity <= 0) {
+                return previous.filter(
+                    (item) =>
+                        getInclusionKey(item) !== product.key
+                );
+            }
+
+            if (nextQuantity > product.stock) {
+                setError(
+                    `Only ${product.stock} stock available for ${product.displayName}.`
+                );
+                return previous;
+            }
+
+            const unitSalesPrice =
+                Number(product.salesPrice || 0);
+
+            setError("");
+
+            if (existing) {
+                return previous.map((item) =>
+                    getInclusionKey(item) === product.key
+                        ? {
+                            ...item,
+                            quantity: nextQuantity,
+                            unitSalesPrice,
+                            lineValue:
+                                unitSalesPrice * nextQuantity,
+                            availableStock: product.stock,
+                        }
+                        : item
+                );
+            }
+
+            return [
+                ...previous,
+                {
+                    inventoryKey: product.key,
+                    productId: product.productId,
+                    variantId: product.variantId ?? null,
+                    productName: product.displayName,
+                    variantName: product.variantName,
+                    quantity: nextQuantity,
+                    unitSalesPrice,
+                    lineValue:
+                        unitSalesPrice * nextQuantity,
+                    availableStock: product.stock,
+                },
+            ];
+        });
     }
 
     function removeInclusion(key: string) {
@@ -1602,6 +2145,7 @@ export function usePackageForm(
         openAdd,
         openEdit,
         addInclusion,
+        adjustInclusion,
         removeInclusion,
         handleSubmit,
         handleDelete,

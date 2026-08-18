@@ -817,8 +817,6 @@ const packagePriceExpr = `
         NULLIF(bookings.package_price, 0),
         CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.package_json, '$.package_price')), '') AS DECIMAL(10,2)),
         CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.package_json, '$.price')), '') AS DECIMAL(10,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.packageJSON, '$.package_price')), '') AS DECIMAL(10,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.packageJSON, '$.price')), '') AS DECIMAL(10,2)),
         0
     )
 `;
@@ -828,8 +826,6 @@ const requiredDownPaymentExpr = `
         NULLIF(bookings.required_down_payment, 0),
         CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.package_json, '$.down_payment_amount')), '') AS DECIMAL(10,2)),
         CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.package_json, '$.required_down_payment')), '') AS DECIMAL(10,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.packageJSON, '$.down_payment_amount')), '') AS DECIMAL(10,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(bookings.packageJSON, '$.required_down_payment')), '') AS DECIMAL(10,2)),
         0
     )
 `;
@@ -885,7 +881,6 @@ function bookingSelectFields() {
         COALESCE(bookings.payment_status, 'Unpaid') AS payment_status,
         COALESCE(bookings.payment_status, 'Unpaid') AS paymentStatus,
         bookings.package_json,
-        bookings.packageJSON,
         bookings.created_at             AS createdAt
     `;
 }
@@ -1098,7 +1093,6 @@ exports.handler = async (event) => {
                         event_type,
                         package_name,
                         package_json,
-                        packageJSON,
                         custom_order,
                         theme,
                         venue,
@@ -1111,7 +1105,7 @@ exports.handler = async (event) => {
                         balance,
                         payment_status
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `,
                 [
                     targetStoreId,
@@ -1126,7 +1120,6 @@ exports.handler = async (event) => {
                     finalEventTime,
                     finalEventType,
                     packageNameForSave,
-                    packageJsonForSave,
                     packageJsonForSave,
                     finalCustomOrder,
                     theme || null,
@@ -1274,7 +1267,7 @@ exports.handler = async (event) => {
         // ── PROTECTED: get_booking_page_bookings ────────────────────────────────
         // Use this action on the OwnerBookings, ManagerBookings, and
         // StaffBookings screens. It returns the fields needed by those pages
-        // without returning package_json/packageJSON for hundreds of records.
+        // without returning the package_json snapshot for hundreds of records.
         if (action === "get_booking_page_bookings") {
             const { branch_id, branchId } = body;
             const requestedBranchId = branch_id || branchId;
@@ -1453,7 +1446,7 @@ exports.handler = async (event) => {
             if (!allowedStatuses.includes(status)) return response(400, { error: "Invalid booking status" });
 
             let selectQuery = `
-                SELECT id, status, store_id, branch_id, package_json, packageJSON
+                SELECT id, status, store_id, branch_id, package_json
                 FROM bookings
                 WHERE id = ?
                   AND store_id = ?
@@ -1466,7 +1459,6 @@ exports.handler = async (event) => {
 
             console.log("COMPLETED BLOCK HIT");
             console.log("PACKAGE JSON:", rows[0].package_json);
-            console.log("PACKAGE JSON 2:", rows[0].packageJSON);
 
             const currentStatus = rows[0].status || "Pending Review";
             const allowedTransitions = {

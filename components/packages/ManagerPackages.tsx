@@ -370,6 +370,7 @@ export default function ManagerPackages() {
                 originalValue={form.originalValue}
                 packagePrice={form.packagePrice}
                 onAddInclusion={() => form.addInclusion(packageProducts)}
+                onAdjustInclusion={form.adjustInclusion}
                 onRemoveInclusion={form.removeInclusion}
                 onSubmit={form.handleSubmit}
                 onClose={() => {

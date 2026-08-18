@@ -281,6 +281,70 @@ async function insertOrderItems(
     }
 }
 
+
+async function loadOrderItemsForOrders(connection, storeId, orderIds) {
+    const safeOrderIds = Array.from(
+        new Set(
+            (Array.isArray(orderIds) ? orderIds : [])
+                .map((value) => toSafeString(value, 100))
+                .filter(Boolean)
+        )
+    );
+
+    if (safeOrderIds.length === 0) {
+        return new Map();
+    }
+
+    const placeholders = safeOrderIds.map(() => "?").join(",");
+    const [rows] = await connection.execute(
+        `SELECT
+             oi.order_id AS orderId,
+             oi.product_id AS productId,
+             oi.variant_id AS variantId,
+             oi.product_name AS name,
+             oi.quantity,
+             oi.unit_price AS unitPrice,
+             oi.line_total AS lineTotal,
+             CASE
+                 WHEN oi.variant_id IS NOT NULL
+                     THEN COALESCE(pv.original_price, p.original_price, 0)
+                 ELSE COALESCE(p.original_price, 0)
+             END AS costPrice
+         FROM order_items oi
+                  LEFT JOIN products p
+                            ON p.id = oi.product_id
+                                AND p.store_id = oi.store_id
+                  LEFT JOIN product_variants pv
+                            ON pv.id = oi.variant_id
+                                AND pv.product_id = oi.product_id
+         WHERE oi.store_id = ?
+           AND oi.order_id IN (${placeholders})
+         ORDER BY oi.order_id ASC, oi.id ASC`,
+        [storeId, ...safeOrderIds]
+    );
+
+    const byOrderId = new Map();
+
+    for (const row of rows) {
+        const orderId = String(row.orderId || "");
+        if (!byOrderId.has(orderId)) {
+            byOrderId.set(orderId, []);
+        }
+
+        byOrderId.get(orderId).push({
+            productId: row.productId == null ? null : Number(row.productId),
+            variantId: row.variantId == null ? null : Number(row.variantId),
+            name: String(row.name || ""),
+            quantity: Number(row.quantity || 0),
+            unitPrice: Number(row.unitPrice || 0),
+            lineTotal: Number(row.lineTotal || 0),
+            costPrice: Number(row.costPrice || 0),
+        });
+    }
+
+    return byOrderId;
+}
+
 async function decreaseStockForOrder(
     connection,
     storeId,
@@ -644,7 +708,7 @@ exports.handler = async (event) => {
 
                              o.item,
                              o.total,
-                             o.order_date AS orderDate,
+                             DATE_FORMAT(o.order_date, '%Y-%m-%d') AS orderDate,
                              o.created_at AS createdAt
 
                          FROM orders o
@@ -659,12 +723,21 @@ exports.handler = async (event) => {
                         [orderId]
                     );
 
+                const orderItemsById = await loadOrderItemsForOrders(
+                    connection,
+                    storeId,
+                    [orderId]
+                );
+
                 return jsonResponse(
                     201,
                     headers,
                     {
                         success: true,
-                        order: rows[0],
+                        order: {
+                            ...rows[0],
+                            orderItems: orderItemsById.get(String(orderId)) || [],
+                        },
                     }
                 );
             } catch (error) {
@@ -749,7 +822,7 @@ exports.handler = async (event) => {
 
                     o.item,
                     o.total,
-                    o.order_date AS orderDate,
+                    DATE_FORMAT(o.order_date, '%Y-%m-%d') AS orderDate,
                     o.created_at AS createdAt
 
                 FROM orders o
@@ -782,12 +855,23 @@ exports.handler = async (event) => {
                     params
                 );
 
+            const orderItemsById = await loadOrderItemsForOrders(
+                connection,
+                storeId,
+                rows.map((row) => row.orderId)
+            );
+
+            const orders = rows.map((row) => ({
+                ...row,
+                orderItems: orderItemsById.get(String(row.orderId)) || [],
+            }));
+
             return jsonResponse(
                 200,
                 headers,
                 {
                     success: true,
-                    orders: rows,
+                    orders,
                 }
             );
         }
