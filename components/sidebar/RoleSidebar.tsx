@@ -206,6 +206,18 @@ function subscribeToSidebarStorage(
     };
 }
 
+function subscribeToHydration() {
+    return () => undefined;
+}
+
+function getClientHydrationSnapshot() {
+    return true;
+}
+
+function getServerHydrationSnapshot() {
+    return false;
+}
+
 function formatPersonName(name: string) {
     return name
         .trim()
@@ -305,6 +317,17 @@ export default function RoleSidebar() {
     const { user } = useCurrentUser();
     const pathname = usePathname();
 
+    /*
+     * Keep the server render and the browser's first render identical.
+     * After hydration, this becomes true and the sidebar can safely use
+     * browser/account-specific values from useCurrentUser and storage.
+     */
+    const isHydrated = useSyncExternalStore(
+        subscribeToHydration,
+        getClientHydrationSnapshot,
+        getServerHydrationSnapshot,
+    );
+
     const [logoFailed, setLogoFailed] =
         useState(false);
 
@@ -360,39 +383,48 @@ export default function RoleSidebar() {
             }
         }, [storedSnapshot]);
 
+    /*
+     * IMPORTANT:
+     * Do not use useCurrentUser() values until hydration is complete.
+     * The server cannot see browser storage/account state, so using those
+     * values on the first client render would cause a hydration mismatch.
+     */
+    const hydratedUser =
+        isHydrated ? user : undefined;
+
     const role = normalizeRole(
-        user?.role || storedData.role,
+        hydratedUser?.role || storedData.role,
     );
 
     const permissions =
         normalizePermissions(
-            user?.permissions ||
+            hydratedUser?.permissions ||
             storedData.permissions,
         );
 
     const storeName =
-        user?.store_name ||
+        hydratedUser?.store_name ||
         storedData.storeName ||
         "StockNBook";
 
     const branchName =
-        user?.branch_name ||
+        hydratedUser?.branch_name ||
         storedData.branchName ||
         "";
 
     const ownerName =
-        user?.owner_name ||
+        hydratedUser?.owner_name ||
         storedData.ownerName ||
         storeName ||
         "Owner";
 
     const managerName =
-        user?.manager_name ||
+        hydratedUser?.manager_name ||
         storedData.managerName ||
         "Manager";
 
     const staffName =
-        user?.staff_name ||
+        hydratedUser?.staff_name ||
         storedData.staffName ||
         "Staff";
 

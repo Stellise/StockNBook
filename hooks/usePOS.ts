@@ -33,6 +33,33 @@ async function safeJson<T>(res: Response): Promise<T> {
     }
 }
 
+function safeSetSessionJson(key: string, value: unknown): boolean {
+    if (typeof window === "undefined") return false;
+
+    try {
+        sessionStorage.setItem(key, JSON.stringify(value));
+        return true;
+    } catch (error) {
+        console.warn(`POS cache skipped for "${key}":`, error);
+
+        /*
+         * The API/database is the source of truth.
+         * A full Owner order history can be much larger than the browser's
+         * sessionStorage quota. Never allow a cache write failure to break
+         * the POS data load.
+         */
+        if (key === "stocknbook_orders") {
+            try {
+                sessionStorage.removeItem(key);
+            } catch {
+                // Ignore cache cleanup failures.
+            }
+        }
+
+        return false;
+    }
+}
+
 function getManilaDateParts(value: Date) {
     const parts = new Intl.DateTimeFormat("en-US", {
         timeZone: "Asia/Manila",
@@ -49,6 +76,11 @@ function getManilaDateParts(value: Date) {
         month: readPart("month"),
         day: readPart("day"),
     };
+}
+
+function getManilaDateInputValue(value = new Date()) {
+    const { year, month, day } = getManilaDateParts(value);
+    return `${year}-${month}-${day}`;
 }
 
 function getTransactionStoreCode() {
@@ -111,7 +143,9 @@ function createPosTransactionId(existingOrders: Order[], now: Date) {
 }
 
 export function usePOS() {
-    const [orders, setOrders] = useState<Order[]>(() => readOrders());
+    const [orders, setOrders] = useState<Order[]>(() =>
+        readRole() === "owner" ? [] : readOrders()
+    );
     const [cart, setCart] = useState<CartMap>({});
     const [products, setProducts] = useState<Product[]>(() => readProducts());
     const [manualCategories, setManualCategories] = useState<Category[]>(() =>
@@ -129,6 +163,26 @@ export function usePOS() {
     const [branches, setBranches] = useState<Branch[]>([]);
     const [selectedSalesBranchId, setSelectedSalesBranchId] =
         useState<string>("");
+
+    /*
+     * Owner POS starts on today's Manila date instead of loading the entire
+     * order history. This keeps the first Owner render fast and makes the
+     * date inputs immediately show an actual date instead of dd/mm/yyyy.
+     */
+    const [ownerOrderStartDate, setOwnerOrderStartDate] = useState<string>(() =>
+        getManilaDateInputValue()
+    );
+    const [ownerOrderEndDate, setOwnerOrderEndDate] = useState<string>(() =>
+        getManilaDateInputValue()
+    );
+
+    const setOwnerOrderDateRange = useCallback(
+        (startDate: string, endDate: string) => {
+            setOwnerOrderStartDate(startDate);
+            setOwnerOrderEndDate(endDate);
+        },
+        []
+    );
 
     const [categoryFilter, setCategoryFilter] = useState<string>("All");
     const [search, setSearch] = useState("");
@@ -197,7 +251,29 @@ export function usePOS() {
                         "Content-Type": "application/json",
                         Authorization: `Bearer ${token}`,
                     },
-                    body: JSON.stringify({ action: "get_orders" }),
+                    body: JSON.stringify({
+                        action: "get_orders",
+                        ...(
+                            currentRole === "owner" &&
+                            selectedSalesBranchId
+                                ? {
+                                    branch_id: Number(
+                                        selectedSalesBranchId
+                                    ),
+                                }
+                                : {}
+                        ),
+                        ...(
+                            currentRole === "owner" && ownerOrderStartDate
+                                ? { date_from: ownerOrderStartDate }
+                                : {}
+                        ),
+                        ...(
+                            currentRole === "owner" && ownerOrderEndDate
+                                ? { date_to: ownerOrderEndDate }
+                                : {}
+                        ),
+                    }),
                 }),
             ]);
 
@@ -209,17 +285,17 @@ export function usePOS() {
                 const mapped = productsData.products.map(mapProduct);
 
                 setProducts(mapped);
-                sessionStorage.setItem(
+                safeSetSessionJson(
                     "stocknbook_inventory_products",
-                    JSON.stringify(mapped)
+                    mapped
                 );
             }
 
             if (categoriesRes.ok && Array.isArray(categoriesData.categories)) {
                 setManualCategories(categoriesData.categories);
-                sessionStorage.setItem(
+                safeSetSessionJson(
                     "stocknbook_categories",
-                    JSON.stringify(categoriesData.categories)
+                    categoriesData.categories
                 );
             }
 
@@ -251,6 +327,24 @@ export function usePOS() {
                             })
                             : [],
                         total: Number(o.total || 0),
+                        cost: Number(
+                            o.totalCost ??
+                            o.total_cost ??
+                            o.total ??
+                            0
+                        ),
+                        profit: Number(
+                            o.profit ??
+                            (
+                                Number(o.total || 0) -
+                                Number(
+                                    o.totalCost ??
+                                    o.total_cost ??
+                                    o.total ??
+                                    0
+                                )
+                            )
+                        ),
                         date: safeDate.toLocaleDateString("en-US", {
                             month: "long",
                             day: "numeric",
@@ -274,12 +368,32 @@ export function usePOS() {
                 });
 
                 setOrders(mapped);
-                sessionStorage.setItem("stocknbook_orders", JSON.stringify(mapped));
+
+                /*
+                 * Manager/Staff only load one branch, so their small cache can
+                 * still be kept for compatibility. Owner may load the entire
+                 * store history; keeping that in sessionStorage is what caused
+                 * QuotaExceededError and later reset the Owner view to 0.
+                 */
+                if (currentRole === "owner") {
+                    try {
+                        sessionStorage.removeItem("stocknbook_orders");
+                    } catch {
+                        // The live React state above is still valid.
+                    }
+                } else {
+                    safeSetSessionJson("stocknbook_orders", mapped);
+                }
             }
         } catch (err) {
             console.warn("POS loadData failed:", err);
         }
-    }, [buildProductsPayload]);
+    }, [
+        buildProductsPayload,
+        selectedSalesBranchId,
+        ownerOrderStartDate,
+        ownerOrderEndDate,
+    ]);
 
     const loadBranches = useCallback(async () => {
         if (typeof window === "undefined") return;
@@ -331,12 +445,23 @@ export function usePOS() {
 
     useEffect(() => {
         const sync = () => {
+            const currentRole = readRole();
+
             setProducts(readProducts());
-            setOrders(readOrders());
             setManualCategories(readCategories());
-            setRole(readRole());
+            setRole(currentRole);
             setAssignedBranchId(readBranchId());
             setAssignedBranchName(readBranchName());
+
+            if (currentRole === "owner") {
+                /*
+                 * Owner orders come from the API, not sessionStorage.
+                 * The full store history may exceed the storage quota.
+                 */
+                void loadData();
+            } else {
+                setOrders(readOrders());
+            }
         };
 
         window.addEventListener("focus", sync);
@@ -346,7 +471,7 @@ export function usePOS() {
             window.removeEventListener("focus", sync);
             window.removeEventListener("storage", sync);
         };
-    }, []);
+    }, [loadData]);
 
     const branchRawProducts = useMemo(() => {
         if (isBranchUser) return products;
@@ -531,24 +656,24 @@ export function usePOS() {
         return Math.max(0, paymentNumber - total);
     }, [paymentNumber, total]);
 
-    async function handlePlaceOrder() {
-        if (!validateStockOrAlert()) return;
+    async function handlePlaceOrder(): Promise<boolean> {
+        if (!validateStockOrAlert()) return false;
 
         if (cartItems.length === 0) {
             alert("Please add at least 1 item to the order.");
-            return;
+            return false;
         }
 
-        const existingOrders = readOrders();
+        const existingOrders = orders;
 
         if (!Number.isFinite(paymentNumber)) {
             alert("Please enter a valid payment amount.");
-            return;
+            return false;
         }
 
         if (paymentNumber < total) {
             alert("Payment must be equal or greater than the total.");
-            return;
+            return false;
         }
 
         const items: OrderItem[] = cartItems.map((i) => ({
@@ -577,13 +702,18 @@ export function usePOS() {
             items,
             total,
             date: todayKey,
+            branchId: activeBranchId
+                ? Number(activeBranchId)
+                : null,
+            branchName:
+                activeBranchName || null,
         };
 
         const token = sessionStorage.getItem("token");
 
         if (!token) {
             alert("No token found. Please log in again.");
-            return;
+            return false;
         }
 
         const itemText =
@@ -616,14 +746,67 @@ export function usePOS() {
                 }),
             });
 
-            if (!orderRes.ok) {
-                const data = await orderRes
-                    .json()
-                    .catch(() => ({} as { error?: string }));
+            const orderData = await safeJson<{
+                success?: boolean;
+                error?: string;
+                order?: {
+                    orderId?: string;
+                    branchId?: number | string | null;
+                    branchName?: string | null;
+                    totalCost?: number;
+                    profit?: number;
+                };
+            }>(orderRes);
 
-                alert(data?.error || "Failed to save order to database.");
-                return;
+            if (!orderRes.ok) {
+                alert(
+                    orderData?.error ||
+                    "Failed to save order to database."
+                );
+                return false;
             }
+
+            /*
+             * The backend owns the final order ID because order_id is a
+             * table-wide PRIMARY KEY. Another branch may already have used
+             * the sequence generated from this branch's locally loaded list.
+             */
+            const persistedOrder: Order = {
+                ...newOrder,
+                id:
+                    String(
+                        orderData?.order?.orderId ||
+                        newOrder.id
+                    ),
+                branchId:
+                    orderData?.order?.branchId == null
+                        ? newOrder.branchId
+                        : Number(
+                            orderData.order.branchId
+                        ),
+                branchName:
+                    String(
+                        orderData?.order?.branchName ||
+                        newOrder.branchName ||
+                        ""
+                    ) || null,
+                cost:
+                    Number.isFinite(
+                        Number(orderData?.order?.totalCost)
+                    )
+                        ? Number(
+                            orderData?.order?.totalCost
+                        )
+                        : undefined,
+                profit:
+                    Number.isFinite(
+                        Number(orderData?.order?.profit)
+                    )
+                        ? Number(
+                            orderData?.order?.profit
+                        )
+                        : undefined,
+            };
 
             const refreshRes = await fetch("/api/products", {
                 method: "POST",
@@ -640,21 +823,29 @@ export function usePOS() {
                 const mapped = refreshData.products.map(mapProduct);
 
                 setProducts(mapped);
-                sessionStorage.setItem(
+                safeSetSessionJson(
                     "stocknbook_inventory_products",
-                    JSON.stringify(mapped)
+                    mapped
                 );
             }
 
-            const updatedOrders = [newOrder, ...existingOrders];
+            const updatedOrders = [
+                persistedOrder,
+                ...existingOrders,
+            ];
 
-            sessionStorage.setItem("stocknbook_orders", JSON.stringify(updatedOrders));
+            safeSetSessionJson(
+                "stocknbook_orders",
+                updatedOrders
+            );
             setOrders(updatedOrders);
 
             resetOrderDraft();
+            return true;
         } catch (err) {
             console.error(err);
             alert("Failed to place order.");
+            return false;
         }
     }
 
@@ -680,58 +871,18 @@ export function usePOS() {
         0
     );
 
-    const totalProfit = orders.reduce((sum, order) => {
-        const orderProfit = order.items.reduce((itemSum, item) => {
-            const buyableItem = allBuyableItems.find((p) => p.name === item.name);
-            if (!buyableItem) return itemSum;
+    const calculateOrderProfit = useCallback(
+        (order: Order) => {
+            const backendProfit = Number(order.profit);
 
-            const unitProfit =
-                Number(buyableItem.salesPrice || 0) -
-                Number(buyableItem.originalPrice || 0);
+            if (Number.isFinite(backendProfit)) {
+                return backendProfit;
+            }
 
-            return itemSum + unitProfit * Number(item.quantity || 0);
-        }, 0);
-
-        return sum + orderProfit;
-    }, 0);
-
-    const todayProfit = todayOrdersForSales.reduce((sum, order) => {
-        const orderProfit = order.items.reduce((itemSum, item) => {
-            const buyableItem = allBuyableItems.find((p) => p.name === item.name);
-            if (!buyableItem) return itemSum;
-
-            const unitProfit =
-                Number(buyableItem.salesPrice || 0) -
-                Number(buyableItem.originalPrice || 0);
-
-            return itemSum + unitProfit * Number(item.quantity || 0);
-        }, 0);
-
-        return sum + orderProfit;
-    }, 0);
-
-    const currentMonth = new Date().toLocaleDateString("en-PH", {
-        month: "long",
-        year: "numeric",
-    });
-
-    function getBranchSales(branch: Branch) {
-        const branchBuyableItems = allBuyableItems.filter(
-            (p) => String(p.branchId || "") === String(branch.id)
-        );
-
-        const branchOrders = orders.filter(
-            (order) => String(order.branchId || "") === String(branch.id)
-        );
-
-        const sales = branchOrders.reduce(
-            (sum, order) => sum + Number(order.total || 0),
-            0
-        );
-
-        const profit = branchOrders.reduce((sum, order) => {
-            const orderProfit = order.items.reduce((itemSum, item) => {
-                const buyableItem = branchBuyableItems.find(
+            // Compatibility fallback for any cached/older order object that
+            // does not yet contain backend profit.
+            return order.items.reduce((itemSum, item) => {
+                const buyableItem = allBuyableItems.find(
                     (p) => p.name === item.name
                 );
 
@@ -741,11 +892,71 @@ export function usePOS() {
                     Number(buyableItem.salesPrice || 0) -
                     Number(buyableItem.originalPrice || 0);
 
-                return itemSum + unitProfit * Number(item.quantity || 0);
+                return (
+                    itemSum +
+                    unitProfit * Number(item.quantity || 0)
+                );
             }, 0);
+        },
+        [allBuyableItems]
+    );
 
-            return sum + orderProfit;
-        }, 0);
+    const totalProfit = orders.reduce(
+        (sum, order) => sum + calculateOrderProfit(order),
+        0
+    );
+
+    const todayProfit = todayOrdersForSales.reduce(
+        (sum, order) => sum + calculateOrderProfit(order),
+        0
+    );
+
+    const currentMonth = new Date().toLocaleDateString("en-PH", {
+        month: "long",
+        year: "numeric",
+    });
+
+    function getBranchSales(branch: Branch) {
+        const branchId = String(branch.id || "").trim();
+        const branchName = String(branch.branchName || "")
+            .trim()
+            .toLowerCase();
+
+        const branchOrders = orders.filter((order) => {
+            const orderBranchId = String(order.branchId || "").trim();
+            const orderBranchName = String(order.branchName || "")
+                .trim()
+                .toLowerCase();
+
+            // Primary match: branch ID.
+            if (orderBranchId && orderBranchId === branchId) {
+                return true;
+            }
+
+            // Fallback for older/cached orders that have the correct
+            // branch name but no branch ID.
+            if (
+                !orderBranchId &&
+                orderBranchName &&
+                branchName &&
+                orderBranchName === branchName
+            ) {
+                return true;
+            }
+
+            return false;
+        });
+
+        const sales = branchOrders.reduce(
+            (sum, order) => sum + Number(order.total || 0),
+            0
+        );
+
+        const profit = branchOrders.reduce(
+            (sum, order) =>
+                sum + calculateOrderProfit(order),
+            0
+        );
 
         return {
             orders: branchOrders,
@@ -765,12 +976,18 @@ export function usePOS() {
     return {
         orders,
         cart,
+        products,
+        allBuyableItems,
 
         role,
 
         branches,
         selectedSalesBranchId,
         setSelectedSalesBranchId,
+
+        ownerOrderStartDate,
+        ownerOrderEndDate,
+        setOwnerOrderDateRange,
 
         categoryFilter,
         setCategoryFilter,

@@ -42,6 +42,20 @@ function formatCurrentDateTime(value: Date) {
     return `${dateLabel} | ${timeLabel}`;
 }
 
+function getLocalDateInputValue(value = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Manila",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(value);
+
+    const readPart = (type: Intl.DateTimeFormatPartTypes) =>
+        parts.find((part) => part.type === type)?.value || "";
+
+    return `${readPart("year")}-${readPart("month")}-${readPart("day")}`;
+}
+
 function toTransactionDateValue(value: string) {
     const rawValue = String(value || "").trim();
     const isoDateMatch = rawValue.match(/^(\d{4}-\d{2}-\d{2})/);
@@ -122,6 +136,13 @@ function normalizeOrderItemName(value: string) {
         .replace(/\s+/g, " ");
 }
 
+function normalizeBranchName(value: string | null | undefined) {
+    return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+}
+
 function buildProductCostLookup(products: Product[]) {
     const lookup = new Map<string, number>();
 
@@ -154,6 +175,72 @@ function buildProductCostLookup(products: Product[]) {
         }
 
         addCost(product.name, Number(product.originalPrice || 0));
+    });
+
+    return lookup;
+}
+
+function buildProductProfitLookup(products: Product[]) {
+    const lookup = new Map<string, number>();
+
+    const addProfit = (
+        name: string,
+        salesPrice: number,
+        originalPrice: number,
+    ) => {
+        const normalizedName = normalizeOrderItemName(name);
+        const profit =
+            Number(salesPrice || 0) -
+            Number(originalPrice || 0);
+
+        if (!normalizedName || !Number.isFinite(profit)) return;
+
+        lookup.set(normalizedName, profit);
+    };
+
+    products.forEach((product) => {
+        const variants = Array.isArray(product.variants)
+            ? product.variants
+            : [];
+
+        if (variants.length > 0) {
+            variants.forEach((variant) => {
+                const productName = String(product.name || "").trim();
+                const variantName = String(variant.name || "").trim();
+
+                addProfit(
+                    `${productName}/${variantName}`,
+                    Number(variant.salesPrice || 0),
+                    Number(variant.originalPrice || 0),
+                );
+
+                addProfit(
+                    `${productName} / ${variantName}`,
+                    Number(variant.salesPrice || 0),
+                    Number(variant.originalPrice || 0),
+                );
+
+                addProfit(
+                    `${productName}-${variantName}`,
+                    Number(variant.salesPrice || 0),
+                    Number(variant.originalPrice || 0),
+                );
+
+                addProfit(
+                    `${productName} - ${variantName}`,
+                    Number(variant.salesPrice || 0),
+                    Number(variant.originalPrice || 0),
+                );
+            });
+
+            return;
+        }
+
+        addProfit(
+            product.name,
+            Number(product.salesPrice || 0),
+            Number(product.originalPrice || 0),
+        );
     });
 
     return lookup;
@@ -242,8 +329,12 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
     const [branchQuery, setBranchQuery] = useState("All Branches");
     const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
     const [orderIdQuery, setOrderIdQuery] = useState("");
-    const [startDate, setStartDate] = useState("");
-    const [endDate, setEndDate] = useState("");
+    const [startDate, setStartDate] = useState(() =>
+        pos.ownerOrderStartDate || getLocalDateInputValue()
+    );
+    const [endDate, setEndDate] = useState(() =>
+        pos.ownerOrderEndDate || getLocalDateInputValue()
+    );
 
     const branchSelectorRef = useRef<HTMLDivElement>(null);
 
@@ -286,24 +377,77 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
         );
     }, [branchQuery, pos.branches]);
 
+    /*
+     * Owner branch filtering is done here instead of relying only on
+     * pos.getBranchSales(). Some older/cached orders can contain the correct
+     * branchName but an absent or mismatched branchId. Manager/Staff do not
+     * notice that because their API response is already scoped to their branch.
+     *
+     * For Owner:
+     * 1. Match the branch by ID when possible.
+     * 2. Fall back to the normalized branch name.
+     */
+    const selectedBranchOrders = useMemo(() => {
+        if (isAllBranchesView) {
+            return pos.orders;
+        }
+
+        if (!selectedBranch) {
+            return [] as Order[];
+        }
+
+        const selectedId = String(selectedBranch.id || "").trim();
+        const selectedName = normalizeBranchName(selectedBranch.branchName);
+
+        return pos.orders.filter((order) => {
+            const orderBranchId = String(order.branchId || "").trim();
+            const orderBranchName = normalizeBranchName(order.branchName);
+
+            if (
+                orderBranchId &&
+                selectedId &&
+                orderBranchId === selectedId
+            ) {
+                return true;
+            }
+
+            if (
+                orderBranchName &&
+                selectedName &&
+                orderBranchName === selectedName
+            ) {
+                return true;
+            }
+
+            return false;
+        });
+    }, [
+        isAllBranchesView,
+        pos.orders,
+        selectedBranch,
+    ]);
+
+    const selectedBranchSales = useMemo(
+        () =>
+            selectedBranchOrders.reduce(
+                (sum, order) =>
+                    sum + Number(order.total || 0),
+                0,
+            ),
+        [selectedBranchOrders],
+    );
+
     const scopeSales = isAllBranchesView
         ? {
             orders: pos.orders,
             sales: pos.totalRevenue,
             profit: pos.totalProfit,
         }
-        : selectedBranch
-            ? pos.getBranchSales(selectedBranch)
-            : {
-                orders: [] as Order[],
-                sales: 0,
-                profit: 0,
-            };
-
-    const scopeTotalCost = Math.max(
-        0,
-        Number(scopeSales.sales || 0) - Number(scopeSales.profit || 0),
-    );
+        : {
+            orders: selectedBranchOrders,
+            sales: selectedBranchSales,
+            profit: 0,
+        };
 
     const extendedPOS = pos as UsePOSReturn & {
         products?: Product[];
@@ -319,6 +463,32 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
     const productCostLookup = useMemo(
         () => buildProductCostLookup(productsForCostCalculation),
         [productsForCostCalculation],
+    );
+
+    /*
+     * Use the same product scope as the selected branch when calculating
+     * branch profit. This mirrors the Manager/Staff POS calculation, which
+     * only uses products belonging to the assigned branch.
+     */
+    const productsForProfitCalculation = useMemo(() => {
+        if (isAllBranchesView || !selectedBranch) {
+            return productsForCostCalculation;
+        }
+
+        return productsForCostCalculation.filter(
+            (product) =>
+                String(product.branchId || "") ===
+                String(selectedBranch.id),
+        );
+    }, [
+        isAllBranchesView,
+        productsForCostCalculation,
+        selectedBranch,
+    ]);
+
+    const productProfitLookup = useMemo(
+        () => buildProductProfitLookup(productsForProfitCalculation),
+        [productsForProfitCalculation],
     );
 
     const hasDateFilter = Boolean(startDate || endDate);
@@ -338,33 +508,54 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
     }, [endDate, hasDateFilter, scopeSales.orders, startDate]);
 
     const overviewTotals = useMemo(() => {
-        if (!hasDateFilter) {
-            return {
-                sales: Number(scopeSales.sales || 0),
-                cost: scopeTotalCost,
-                profit: Number(scopeSales.profit || 0),
-                transactions: scopeSales.orders.length,
-            };
-        }
+        const ordersToCalculate = hasDateFilter
+            ? dateFilteredOrders
+            : scopeSales.orders;
 
-        const scopeSalesValue = Number(scopeSales.sales || 0);
-        const fallbackCostRatio =
-            scopeSalesValue > 0
-                ? Math.max(0, scopeTotalCost / scopeSalesValue)
-                : 0;
-
-        return dateFilteredOrders.reduce(
+        return ordersToCalculate.reduce(
             (totals, order) => {
-                const sales = Math.max(0, Number(order.total || 0));
-                const cost = calculateOrderCost(
-                    order,
-                    productCostLookup,
-                    fallbackCostRatio,
-                );
+                const sales = Number(order.total || 0);
+                const backendCost = Number(order.cost);
+                const backendProfit = Number(order.profit);
+
+                /*
+                 * Prefer the exact per-order metrics returned by the POS
+                 * backend. They are calculated from order_items using the
+                 * order's product_id / variant_id, so branch changes now
+                 * produce the correct branch-specific cost and profit.
+                 *
+                 * Keep the old lookup only as a compatibility fallback for
+                 * any older cached order that does not yet contain metrics.
+                 */
+                let orderProfit = backendProfit;
+                let orderCost = backendCost;
+
+                if (!Number.isFinite(orderProfit)) {
+                    orderProfit = (
+                        Array.isArray(order.items) ? order.items : []
+                    ).reduce((itemProfit, item) => {
+                        const key = normalizeOrderItemName(item.name);
+                        const unitProfit = productProfitLookup.get(key);
+
+                        if (unitProfit === undefined) {
+                            return itemProfit;
+                        }
+
+                        return (
+                            itemProfit +
+                            Number(unitProfit || 0) *
+                            Number(item.quantity || 0)
+                        );
+                    }, 0);
+                }
+
+                if (!Number.isFinite(orderCost)) {
+                    orderCost = sales - orderProfit;
+                }
 
                 totals.sales += sales;
-                totals.cost += cost;
-                totals.profit += sales - cost;
+                totals.cost += orderCost;
+                totals.profit += orderProfit;
                 totals.transactions += 1;
 
                 return totals;
@@ -379,11 +570,8 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
     }, [
         dateFilteredOrders,
         hasDateFilter,
-        productCostLookup,
-        scopeSales.orders.length,
-        scopeSales.profit,
-        scopeSales.sales,
-        scopeTotalCost,
+        productProfitLookup,
+        scopeSales.orders,
     ]);
 
     const orderBranchNames = useMemo(() => {
@@ -406,17 +594,43 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
             }
         });
 
-        // Fallback for older orders without stored branch information.
+        // Fallback for older orders without reliable branch IDs.
         pos.branches.forEach((branch) => {
-            pos.getBranchSales(branch).orders.forEach((order) => {
-                if (!names.has(order.id)) {
-                    names.set(order.id, branch.branchName);
+            const branchId = String(branch.id || "").trim();
+            const branchName = normalizeBranchName(branch.branchName);
+
+            pos.orders.forEach((order) => {
+                if (names.has(order.id)) {
+                    return;
+                }
+
+                const orderBranchId =
+                    String(order.branchId || "").trim();
+
+                const orderBranchName =
+                    normalizeBranchName(order.branchName);
+
+                const matchesId =
+                    Boolean(orderBranchId) &&
+                    Boolean(branchId) &&
+                    orderBranchId === branchId;
+
+                const matchesName =
+                    Boolean(orderBranchName) &&
+                    Boolean(branchName) &&
+                    orderBranchName === branchName;
+
+                if (matchesId || matchesName) {
+                    names.set(
+                        order.id,
+                        branch.branchName,
+                    );
                 }
             });
         });
 
         return names;
-    }, [pos.branches, pos.getBranchSales, pos.orders]);
+    }, [pos.branches, pos.orders]);
 
     const getOrderBranchName = (order: Order) => {
         if (order.branchName?.trim()) {
@@ -473,6 +687,16 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
         };
     }, [isAllBranchesView, selectedBranch]);
 
+    const handleStartDateChange = (value: string) => {
+        setStartDate(value);
+        pos.setOwnerOrderDateRange(value, endDate);
+    };
+
+    const handleEndDateChange = (value: string) => {
+        setEndDate(value);
+        pos.setOwnerOrderDateRange(startDate, value);
+    };
+
     const handleSelectAllBranches = () => {
         setIsAllBranchesView(true);
         pos.setSelectedSalesBranchId("");
@@ -481,10 +705,22 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
     };
 
     const handleSelectBranch = (branch: Branch) => {
+        const today = getLocalDateInputValue();
+
         setIsAllBranchesView(false);
         pos.setSelectedSalesBranchId(String(branch.id));
         setBranchQuery(branch.branchName);
         setIsBranchMenuOpen(false);
+
+        /*
+         * Manager/Staff POS cards are "today" totals.
+         * Default the Owner's selected-branch view to today as well so the
+         * same store + same branch shows the same daily information.
+         * The Owner can still manually change the From/To dates afterward.
+         */
+        setStartDate(today);
+        setEndDate(today);
+        pos.setOwnerOrderDateRange(today, today);
     };
 
     const handleRefresh = async () => {
@@ -633,7 +869,7 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
                                 value={startDate}
                                 max={endDate || undefined}
                                 onChange={(event) =>
-                                    setStartDate(event.target.value)
+                                    handleStartDateChange(event.target.value)
                                 }
                                 aria-label="Filter transactions from date"
                                 className="h-[42px] w-full rounded-xl border border-[#E3D8EA] bg-white pl-[76px] pr-2 text-xs font-medium text-[#1A1220] outline-none shadow-sm transition focus:border-[#2B174C] focus:ring-4 focus:ring-[#2B174C]/10"
@@ -655,7 +891,7 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
                                 value={endDate}
                                 min={startDate || undefined}
                                 onChange={(event) =>
-                                    setEndDate(event.target.value)
+                                    handleEndDateChange(event.target.value)
                                 }
                                 aria-label="Filter transactions to date"
                                 className="h-[42px] w-full rounded-xl border border-[#E3D8EA] bg-white pl-[58px] pr-2 text-xs font-medium text-[#1A1220] outline-none shadow-sm transition focus:border-[#2B174C] focus:ring-4 focus:ring-[#2B174C]/10"
@@ -815,9 +1051,12 @@ export default function OwnerPOS({ pos }: { pos: UsePOSReturn }) {
                             <button
                                 type="button"
                                 onClick={() => {
+                                    const today = getLocalDateInputValue();
+
                                     setOrderIdQuery("");
-                                    setStartDate("");
-                                    setEndDate("");
+                                    setStartDate(today);
+                                    setEndDate(today);
+                                    pos.setOwnerOrderDateRange(today, today);
                                 }}
                                 className="text-xs font-semibold text-[#2B174C] transition hover:text-[#5B2FC6]"
                             >

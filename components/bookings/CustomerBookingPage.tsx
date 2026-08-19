@@ -24,8 +24,11 @@ const STORE_MESSENGER = "your.page.username";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type PackageInclusion = {
+    inventoryKey?: string;
     productId: number;
+    variantId?: number | null;
     productName: string;
+    variantName?: string;
     quantity: number;
     unitSalesPrice: number;
     lineValue: number;
@@ -42,8 +45,10 @@ type PackageItem = {
     discount_type: "amount" | "percentage";
     discount_value: number;
     package_price: number;
+    down_payment_amount?: number;
     duration: string;
     status: "Active" | "Inactive";
+    cover_image?: string;
     inclusions: PackageInclusion[];
 };
 
@@ -142,8 +147,12 @@ const STATUS_MAP: Record<string, { color: string; icon: React.ReactNode }> = {
 const TIMELINE_STEPS = ["Pending Review", "Confirmed", "Preparing", "Completed"];
 
 function getPackageCoverImage(
-    pkg: Pick<PackageItem, "name" | "description" | "category">
+    pkg: Pick<PackageItem, "name" | "description" | "category" | "cover_image">
 ) {
+    if (pkg.cover_image) {
+        return pkg.cover_image;
+    }
+
     const source = `${pkg.category || ""} ${pkg.name} ${pkg.description || ""}`.toLowerCase();
 
     if (source.includes("wedding")) {
@@ -853,6 +862,7 @@ export default function CustomerBookingPage() {
 
     const [activeCategory, setActiveCategory] = useState("All");
     const [detailsPackage, setDetailsPackage] = useState<PackageItem | null>(null);
+    const [showExpandedPackageImage, setShowExpandedPackageImage] = useState(false);
 
     const [showStatusDrawer, setShowStatusDrawer] = useState(() => !!searchParams.get("ref"));
 
@@ -1275,6 +1285,28 @@ export default function CustomerBookingPage() {
         await navigator.clipboard.writeText(bookingReference);
         alert("Booking reference copied.");
     }
+
+    const detailsCoverImage = detailsPackage
+        ? getPackageCoverImage(detailsPackage)
+        : "";
+
+    const detailsInclusionCount = detailsPackage?.inclusions?.length || 0;
+
+    const detailsTotalIncludedUnits = (detailsPackage?.inclusions || []).reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+    );
+
+    const detailsTotalInclusionValue = (detailsPackage?.inclusions || []).reduce(
+        (sum, item) => sum + Number(item.lineValue || 0),
+        0
+    );
+
+    const detailsDiscountLabel = detailsPackage
+        ? detailsPackage.discount_type === "percentage"
+            ? `${Number(detailsPackage.discount_value || 0)}%`
+            : peso(detailsPackage.discount_value || 0)
+        : "";
 
     if (loading) {
         return (
@@ -2330,79 +2362,265 @@ export default function CustomerBookingPage() {
 
             {/* ── Package Details Modal ── */}
             {detailsPackage && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
-                    <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[20px] border border-[#E6DDF0] bg-white p-5 shadow-2xl sm:p-6">
-                        <div className="flex items-start justify-between gap-4">
-                            <div>
-                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#806A8C]">
-                                    Package details
-                                </p>
-                                <h2 className="mt-1 text-[26px] font-bold tracking-[-0.02em] text-[#1A1220]">
-                                    {detailsPackage.name}
-                                </h2>
-                                <p className="mt-2 text-[26px] font-bold text-[#2B174C]">
-                                    {peso(detailsPackage.package_price)}
-                                </p>
-                            </div>
+                <div
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={`${detailsPackage.name} package details`}
+                    onClick={() => {
+                        setDetailsPackage(null);
+                        setShowExpandedPackageImage(false);
+                    }}
+                >
+                    <div
+                        className="flex max-h-[92vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[22px] border border-[#E6DDF0] bg-white shadow-[0_24px_80px_rgba(20,10,35,0.28)]"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="relative shrink-0 overflow-hidden bg-[#2D1B4E]">
                             <button
                                 type="button"
-                                onClick={() => setDetailsPackage(null)}
-                                className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#E6DDF0] bg-white text-[#806A8C] transition hover:bg-[#F7F1FF] hover:text-[#2B174C]"
+                                onClick={() => setShowExpandedPackageImage(true)}
+                                className="group/image block h-[280px] w-full cursor-zoom-in overflow-hidden text-left"
+                                aria-label="Expand package cover image"
+                                title="Click to enlarge image"
+                            >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                    src={detailsCoverImage}
+                                    alt={`${detailsPackage.name} package cover`}
+                                    className="h-full w-full object-cover transition duration-300 group-hover/image:scale-[1.02]"
+                                />
+                                <div className="absolute inset-0 bg-gradient-to-t from-[#160C27]/85 via-[#160C27]/15 to-transparent" />
+
+                                <span className="absolute right-5 top-5 rounded-full bg-black/45 px-3 py-1.5 text-[11px] font-semibold text-white backdrop-blur-sm transition group-hover/image:bg-black/60">
+                                    Click image to expand
+                                </span>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setDetailsPackage(null);
+                                    setShowExpandedPackageImage(false);
+                                }}
+                                className="absolute left-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-[#2B174C] shadow-md transition hover:scale-105 hover:bg-white"
                                 aria-label="Close package details"
                             >
                                 <X size={18} />
                             </button>
-                        </div>
-                        <p className="mt-5 text-sm leading-6 text-[#7A6A84]">
-                            {detailsPackage.description || "No description provided."}
-                        </p>
 
-                        <div className="mt-5 rounded-xl border border-[#E6DDF0] bg-[#FFFDF8] px-4 py-3 text-sm text-[#5F4E75]">
-                            <span className="font-semibold text-[#1A1220]">Duration:</span>{" "}
-                            {detailsPackage.duration || "Not set"}
-                        </div>
-
-                        <div className="mt-6">
-                            <h3 className="text-[16px] font-bold text-[#1A1220]">
-                                Package inclusions
-                            </h3>
-                            {detailsPackage.inclusions.length === 0 ? (
-                                <p className="mt-3 rounded-xl border border-dashed border-[#E6DDF0] bg-[#FFFDF8] p-4 text-sm text-[#7A6A84]">
-                                    No inclusions listed.
+                            <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-6">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/75">
+                                    Package details
                                 </p>
-                            ) : (
-                                <div className="mt-3 space-y-2">
-                                    {detailsPackage.inclusions.map((item) => (
-                                        <div
-                                            key={item.productId}
-                                            className="flex items-center justify-between gap-4 rounded-xl border border-[#E6DDF0] bg-[#FFFDF8] px-4 py-3"
-                                        >
-                                            <p className="text-sm font-semibold text-[#1A1220]">
-                                                {item.productName}
-                                            </p>
-                                            <p className="shrink-0 text-xs font-semibold text-[#4E2C66]">
-                                                × {item.quantity}
-                                            </p>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
+                                <h2 className="mt-1 max-w-[820px] text-[28px] font-bold leading-tight text-white">
+                                    {detailsPackage.name}
+                                </h2>
+                            </div>
                         </div>
 
-                        <p className="mt-6 rounded-xl border border-[#D8CBE7] bg-[#F7F1FF] p-4 text-sm leading-6 text-[#5F4E75]">
-                            Themes and color motifs are customizable. Add your preferred
-                            design direction in the booking form.
-                        </p>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                            <div className="grid gap-6 p-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                                <div className="min-w-0 space-y-5">
+                                    <section>
+                                        <h3 className="text-sm font-bold text-[#1A1220]">
+                                            Package Information
+                                        </h3>
+
+                                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                            <CustomerPackageDetailBox
+                                                label="Package Price"
+                                                value={peso(detailsPackage.package_price)}
+                                                strong
+                                            />
+                                            <CustomerPackageDetailBox
+                                                label="Down Payment"
+                                                value={peso(detailsPackage.down_payment_amount || 0)}
+                                            />
+                                            <CustomerPackageDetailBox
+                                                label="Original Value"
+                                                value={peso(detailsPackage.original_value || 0)}
+                                            />
+                                            <CustomerPackageDetailBox
+                                                label="Discount"
+                                                value={detailsDiscountLabel}
+                                            />
+                                            <CustomerPackageDetailBox
+                                                label="Category"
+                                                value={detailsPackage.category || "Other"}
+                                            />
+                                            <CustomerPackageDetailBox
+                                                label="Duration"
+                                                value={detailsPackage.duration || "Not set"}
+                                            />
+                                        </div>
+                                    </section>
+
+                                    <section className="rounded-[16px] border border-[#EAE1EF] bg-[#FFFCF8] p-4">
+                                        <h3 className="text-sm font-bold text-[#1A1220]">
+                                            Description
+                                        </h3>
+                                        <p className="mt-2 text-sm leading-6 text-[#74657D]">
+                                            {detailsPackage.description || "No description provided."}
+                                        </p>
+                                    </section>
+
+                                    <section className="rounded-[16px] border border-[#EAE1EF] bg-white p-4">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-[#1A1220]">
+                                                    Inclusion Summary
+                                                </h3>
+                                                <p className="mt-1 text-xs text-[#84738D]">
+                                                    Quick summary of everything included in this package.
+                                                </p>
+                                            </div>
+
+                                            <span className="rounded-full bg-[#EFE8F8] px-3 py-1 text-xs font-bold text-[#4E2C66]">
+                                                {detailsInclusionCount} {detailsInclusionCount === 1 ? "item" : "items"}
+                                            </span>
+                                        </div>
+
+                                        <div className="mt-4 grid grid-cols-2 gap-3">
+                                            <CustomerPackageDetailBox
+                                                label="Included Units"
+                                                value={`${detailsTotalIncludedUnits} units`}
+                                            />
+                                            <CustomerPackageDetailBox
+                                                label="Inclusion Value"
+                                                value={peso(detailsTotalInclusionValue)}
+                                                strong
+                                            />
+                                        </div>
+                                    </section>
+
+                                    <section className="rounded-[16px] border border-[#D8CBE7] bg-[#F7F1FF] p-4">
+                                        <p className="text-sm leading-6 text-[#5F4E75]">
+                                            Themes and color motifs are customizable. Add your preferred design direction in the booking form.
+                                        </p>
+                                    </section>
+                                </div>
+
+                                <div className="min-w-0">
+                                    <section className="rounded-[18px] border border-[#E6DDF0] bg-[#FBF8FD] p-4">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-[#1A1220]">
+                                                    Package Inclusions
+                                                </h3>
+                                                <p className="mt-1 text-xs text-[#84738D]">
+                                                    Items included in this package.
+                                                </p>
+                                            </div>
+
+                                            <span className="shrink-0 rounded-full bg-[#EEE5F8] px-3 py-1 text-xs font-bold text-[#4E2C66]">
+                                                {detailsInclusionCount} {detailsInclusionCount === 1 ? "item" : "items"}
+                                            </span>
+                                        </div>
+
+                                        <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                                            {detailsInclusionCount === 0 ? (
+                                                <p className="rounded-xl border border-dashed border-[#DCCFE6] bg-white px-4 py-8 text-center text-sm text-[#7A6A84]">
+                                                    No inclusions listed.
+                                                </p>
+                                            ) : (
+                                                (detailsPackage.inclusions || []).map((item, index) => (
+                                                    <div
+                                                        key={item.inventoryKey || `${item.productId}-${item.variantId || 0}-${index}`}
+                                                        className="rounded-[14px] border border-[#E6DDF0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(43,23,76,0.03)]"
+                                                    >
+                                                        <div className="flex items-start justify-between gap-4">
+                                                            <div className="min-w-0">
+                                                                <p className="break-words text-sm font-semibold leading-5 text-[#1A1220]">
+                                                                    {item.productName}
+                                                                </p>
+
+                                                                {item.variantName ? (
+                                                                    <p className="mt-1 break-words text-xs text-[#806F89]">
+                                                                        {item.variantName}
+                                                                    </p>
+                                                                ) : null}
+
+                                                                <p className="mt-1.5 text-xs text-[#7A6A84]">
+                                                                    {peso(item.unitSalesPrice)} each
+                                                                </p>
+                                                            </div>
+
+                                                            <div className="shrink-0 text-right">
+                                                                <p className="text-sm font-bold text-[#2B174C]">
+                                                                    × {item.quantity}
+                                                                </p>
+                                                                <p className="mt-1 text-xs font-semibold text-[#7A6A84]">
+                                                                    {peso(item.lineValue)}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </section>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex shrink-0 flex-col gap-3 border-t border-[#E8DFED] bg-white px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs text-[#8A7A91]">
+                                Review the package details, then select it to continue your booking.
+                            </p>
+
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setDetailsPackage(null)}
+                                    className="rounded-xl border border-[#DCCFE6] bg-white px-5 py-2.5 text-sm font-semibold text-[#2B174C] shadow-sm transition hover:bg-[#F7F1FF]"
+                                >
+                                    Close
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        handleSelectPackage(detailsPackage);
+                                        setDetailsPackage(null);
+                                        setShowExpandedPackageImage(false);
+                                    }}
+                                    className="rounded-xl bg-[#2B174C] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1B0D31]"
+                                >
+                                    Select this package
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {detailsPackage && showExpandedPackageImage && (
+                <div
+                    className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={`${detailsPackage.name} enlarged cover image`}
+                    onClick={() => setShowExpandedPackageImage(false)}
+                >
+                    <div
+                        className="relative flex max-h-[94vh] max-w-[94vw] items-center justify-center"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                            src={detailsCoverImage}
+                            alt={`${detailsPackage.name} enlarged package cover`}
+                            className="max-h-[90vh] max-w-[90vw] rounded-[18px] object-contain shadow-2xl"
+                        />
 
                         <button
                             type="button"
-                            onClick={() => {
-                                handleSelectPackage(detailsPackage);
-                                setDetailsPackage(null);
-                            }}
-                            className="mt-6 inline-flex h-[46px] w-full items-center justify-center rounded-xl bg-[#2B174C] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1B0D31]"
+                            onClick={() => setShowExpandedPackageImage(false)}
+                            className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/95 text-[#2B174C] shadow-md transition hover:scale-105 hover:bg-white"
+                            aria-label="Close enlarged image"
                         >
-                            Select this package
+                            <X size={18} />
                         </button>
                     </div>
                 </div>
@@ -2412,6 +2630,31 @@ export default function CustomerBookingPage() {
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
+
+function CustomerPackageDetailBox({
+                                      label,
+                                      value,
+                                      strong = false,
+                                  }: {
+    label: string;
+    value: string;
+    strong?: boolean;
+}) {
+    return (
+        <div className="rounded-[14px] border border-[#E6DDF0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(43,23,76,0.03)]">
+            <p className="text-xs font-semibold text-[#806A8C]">{label}</p>
+            <p
+                className={`mt-1 text-sm ${
+                    strong
+                        ? "font-bold text-[#2B174C]"
+                        : "font-semibold text-[#1A1220]"
+                }`}
+            >
+                {value}
+            </p>
+        </div>
+    );
+}
 
 function Input({
                    label,

@@ -1003,23 +1003,43 @@ export function PackageFormModal({
     ) as PackageFormCategory[];
 
     const [inclusionSearch, setInclusionSearch] = useState("");
+    const [inclusionCategory, setInclusionCategory] = useState("");
     const [showFormImagePreview, setShowFormImagePreview] = useState(false);
+
+    const inclusionCategoryOptions = Array.from(
+        new Set(
+            products
+                .map((product) => String(product.category || "").trim())
+                .filter(Boolean)
+        )
+    ).sort((a, b) => a.localeCompare(b));
 
     const filteredInclusionProducts = products.filter((product) => {
         const query = inclusionSearch.trim().toLowerCase();
+        const categoryQuery = inclusionCategory.trim().toLowerCase();
 
-        if (!query) return true;
+        const matchesSearch =
+            !query ||
+            [
+                product.displayName,
+                product.productName,
+                product.variantName,
+                product.category,
+            ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase()
+                .includes(query);
 
-        return [
-            product.displayName,
-            product.productName,
-            product.variantName,
-            product.category,
-        ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(query);
+        const matchesCategory =
+            !categoryQuery ||
+            categoryQuery === "all" ||
+            categoryQuery === "all categories" ||
+            String(product.category || "")
+                .toLowerCase()
+                .includes(categoryQuery);
+
+        return matchesSearch && matchesCategory;
     });
 
     const getSelectedQuantity = (key: string) =>
@@ -1231,19 +1251,42 @@ export function PackageFormModal({
                         <div className="grid min-h-[430px] lg:grid-cols-[minmax(0,1fr)_500px]">
                             <div className="min-w-0 border-b border-[#EAE1EF] lg:border-b-0 lg:border-r">
                                 <div className="p-3">
-                                    <div className="relative">
-                                        <Search
-                                            size={15}
-                                            className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9B8AAA]"
-                                        />
-                                        <input
-                                            value={inclusionSearch}
-                                            onChange={(event) =>
-                                                setInclusionSearch(event.target.value)
-                                            }
-                                            placeholder="Search items or variants..."
-                                            className="w-full rounded-xl border border-[#E3D8EA] bg-white px-4 py-2.5 pl-10 text-sm text-[#1A1220] outline-none shadow-sm placeholder:text-[#9B8AAA] focus:border-[#2B174C]"
-                                        />
+                                    <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_240px]">
+                                        <div className="relative">
+                                            <Search
+                                                size={15}
+                                                className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9B8AAA]"
+                                            />
+                                            <input
+                                                value={inclusionSearch}
+                                                onChange={(event) =>
+                                                    setInclusionSearch(event.target.value)
+                                                }
+                                                placeholder="Search items or variants..."
+                                                className="w-full rounded-xl border border-[#E3D8EA] bg-white px-4 py-2.5 pl-10 text-sm text-[#1A1220] outline-none shadow-sm placeholder:text-[#9B8AAA] focus:border-[#2B174C]"
+                                            />
+                                        </div>
+
+                                        <div className="relative">
+                                            <select
+                                                value={inclusionCategory}
+                                                onChange={(event) =>
+                                                    setInclusionCategory(event.target.value)
+                                                }
+                                                className="w-full rounded-xl border border-[#E3D8EA] bg-white px-4 py-2.5 text-sm font-medium text-[#1A1220] outline-none shadow-sm transition focus:border-[#2B174C]"
+                                                aria-label="Filter inclusion products by category"
+                                            >
+                                                <option value="">
+                                                    All Categories
+                                                </option>
+
+                                                {inclusionCategoryOptions.map((option) => (
+                                                    <option key={option} value={option}>
+                                                        {option}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
                                     </div>
                                 </div>
 

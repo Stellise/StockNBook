@@ -158,6 +158,27 @@ async function ensureBranchBelongsToStore(
     return (rows as Array<{ id: number; branch_name: string }>)[0] || null;
 }
 
+async function loadStoreName(
+    connection: Connection,
+    storeId: number
+) {
+    const [rows] = await connection.execute(
+        `SELECT store_name
+         FROM stores
+         WHERE id = ?
+         LIMIT 1`,
+        [storeId]
+    );
+
+    const store = (
+        rows as Array<{
+            store_name?: string;
+        }>
+    )[0];
+
+    return asText(store?.store_name) || "Store";
+}
+
 function getInventoryStatus(stock: number, alertLevel: number) {
     if (stock <= 0) return "Out of Stock";
     if (stock <= alertLevel) return "Low Stock";
@@ -740,6 +761,7 @@ export async function GET(request: NextRequest) {
         }
 
         const [
+            storeName,
             branches,
             inventoryList,
             salesList,
@@ -747,6 +769,7 @@ export async function GET(request: NextRequest) {
             restockHistory,
             forecastReport,
         ] = await Promise.all([
+            loadStoreName(connection, storeId),
             loadBranches(connection, storeId, branchId),
             loadInventory(connection, storeId, branchId),
             loadSales(connection, storeId, branchId, range),
@@ -777,7 +800,7 @@ export async function GET(request: NextRequest) {
             success: true,
             data: {
                 branch: branchName,
-                storeName: "StockNBook",
+                storeName,
                 monthLabel: range.label,
                 isSampleData: false,
                 dateRange: {

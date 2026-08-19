@@ -193,7 +193,7 @@ type SaleRecord = {
     customer: string;
     product: string;
     itemsText?: string;
-    lineItems: SaleLineItem[];
+    lineItems?: SaleLineItem[];
     category: string;
     quantity: number;
     amount: number;
@@ -1880,148 +1880,6 @@ function getBookingPaymentDetails(booking: BookingRecord) {
     };
 }
 
-function getBookingNextStep(status: BookingStatus) {
-    if (status === "pending") return "Confirm Booking";
-    if (status === "confirmed") return "Prepare Booking";
-    if (status === "preparing") return "Complete Booking";
-    if (status === "completed") return "Completed";
-    return "Cancelled";
-}
-
-function getBookingStatusMessage(status: BookingStatus) {
-    if (status === "completed") {
-        return "This booking is already completed.";
-    }
-
-    if (status === "cancelled") {
-        return "This booking has been cancelled.";
-    }
-
-    if (status === "preparing") {
-        return "Prepare the package and event supplies before the event date.";
-    }
-
-    if (status === "confirmed") {
-        return "The booking is confirmed and ready for preparation.";
-    }
-
-    return "Confirm the booking after verifying the required payment.";
-}
-
-function BookingDetailPanel({ booking }: { booking: BookingRecord }) {
-    const payment = getBookingPaymentDetails(booking);
-    const nextStep = getBookingNextStep(booking.status);
-
-    return (
-        <div className="border-t border-[#E6DDF0] bg-[#F9F4FF] p-3">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <div className="space-y-3">
-                    <div className="rounded-[14px] border border-[#E6DDF0] bg-white p-3">
-                        <h4 className="text-[16px] font-bold text-[#1A1220]">
-                            Payment Summary
-                        </h4>
-
-                        <div className="mt-4 space-y-3 text-sm">
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-[#7A6984]">Package Price</span>
-                                <span className="font-semibold text-[#1A1220]">
-                  {formatPeso(payment.packagePrice)}
-                </span>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-[#7A6984]">Required Down Payment</span>
-                                <span className="font-semibold text-[#1A1220]">
-                  {formatPeso(payment.requiredDownPayment)}
-                </span>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-[#7A6984]">Amount Paid</span>
-                                <span className="font-semibold text-[#1A1220]">
-                  {formatPeso(payment.amountPaid)}
-                </span>
-                            </div>
-
-                            <div className="border-t border-[#EFE7F4] pt-3">
-                                <div className="flex items-center justify-between gap-4">
-                                    <span className="font-medium text-[#5E4A68]">Balance</span>
-                                    <span className="text-[19px] font-bold text-[#2B174C]">
-                    {formatPeso(payment.balance)}
-                  </span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="rounded-[14px] border border-[#E6DDF0] bg-white p-3">
-                        <h4 className="text-[16px] font-bold text-[#1A1220]">
-                            Booking Notes
-                        </h4>
-                        <p className="mt-3 text-sm text-[#7A6984]">
-                            {booking.notes || "No notes provided."}
-                        </p>
-                    </div>
-                </div>
-
-                <div className="space-y-3">
-                    <div className="rounded-[14px] border border-[#E6DDF0] bg-white p-3">
-                        <h4 className="text-[16px] font-bold text-[#1A1220]">
-                            Payment Action
-                        </h4>
-
-                        <button
-                            type="button"
-                            onClick={() => {
-                                window.location.href = "/bookings";
-                            }}
-                            className="mt-4 flex w-full items-center justify-center rounded-xl bg-[#2B174C] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1B0D31]"
-                        >
-                            Manage Payment in Bookings
-                        </button>
-
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                            <span className="text-sm text-[#7A6984]">Current Payment</span>
-                            <StatusBadge status={payment.paymentStatus} />
-                        </div>
-
-                        <div className="mt-3 rounded-lg bg-[#F1EAF8] px-3 py-2.5 text-sm text-[#4E2C66]">
-                            Paid {formatPeso(payment.amountPaid)} of{" "}
-                            {formatPeso(payment.packagePrice)}
-                        </div>
-                    </div>
-
-                    <div className="rounded-[14px] border border-[#E6DDF0] bg-white p-3">
-                        <h4 className="text-[16px] font-bold text-[#1A1220]">
-                            Booking Status
-                        </h4>
-
-                        <div className="mt-4 flex items-center justify-between gap-3">
-                            <span className="text-sm text-[#7A6984]">Current Status</span>
-                            <StatusBadge status={getBookingStatusLabel(booking)} />
-                        </div>
-
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                            <span className="text-sm text-[#7A6984]">Next Step</span>
-                            <span className="text-sm font-semibold text-[#1A1220]">
-                {nextStep}
-              </span>
-                        </div>
-
-                        <div className="mt-3 rounded-lg bg-[#E9DFF0] px-3 py-2.5 text-center text-sm font-semibold text-[#6F5A7D]">
-                            {nextStep}
-                        </div>
-
-                        <p className="mt-3 text-center text-xs text-[#95819C]">
-                            {getBookingStatusMessage(booking.status)}
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
 function StatusBadge({ status }: { status: string }) {
     return (
         <span
@@ -3395,7 +3253,7 @@ function PosReportView({
 
     records.forEach((order) => {
         const orderItems =
-            order.lineItems.length > 0
+            Array.isArray(order.lineItems) && order.lineItems.length > 0
                 ? order.lineItems
                 : [
                     {
@@ -3576,8 +3434,6 @@ type BookingReportViewProps = {
     searchQuery: string;
     activeFilter: BookingFilter;
     onFilterChange: (filter: BookingFilter) => void;
-    expandedBookingId: string | null;
-    onToggleExpanded: (bookingId: string) => void;
     showBranchColumn: boolean;
     onExportPdf: () => void;
     onExportXlsx: () => void;
@@ -3589,8 +3445,6 @@ function BookingReportView({
                                searchQuery,
                                activeFilter,
                                onFilterChange,
-                               expandedBookingId,
-                               onToggleExpanded,
                                showBranchColumn,
                                onExportPdf,
                                onExportXlsx,
@@ -3682,65 +3536,71 @@ function BookingReportView({
                     <tbody>
                     {displayedRecords.length > 0 ? (
                         displayedRecords.map((item) => {
-                            const isExpanded = expandedBookingId === item.id;
                             const payment = getBookingPaymentDetails(item);
 
                             return (
-                                <Fragment key={item.id}>
-                                    <tr className={`border-b border-[#EFE8F2] transition-colors ${isExpanded ? "bg-[#F8F2FC]" : "bg-white hover:bg-[#FCFAFF]"}`}>
-                                        <td className="px-2 py-3 align-top">
-                                            <div className="flex items-start gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onToggleExpanded(item.id)}
-                                                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-[#4E2C66] transition hover:bg-[#EEE4F7] hover:text-[#6D35D1]"
-                                                    aria-label={isExpanded ? "Hide booking details" : "Show booking details"}
-                                                >
-                                                    {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                                </button>
-                                                <div className="min-w-0">
-                                                    <p className="break-words font-semibold text-[#1A1220]">{item.customer}</p>
-                                                    <p className="mt-0.5 break-words text-[9px] text-[#8C7A95]">{item.phone || item.reference}</p>
-                                                </div>
-                                            </div>
+                                <tr
+                                    key={item.id}
+                                    className="border-b border-[#EFE8F2] bg-white transition-colors hover:bg-[#FCFAFF]"
+                                >
+                                    <td className="px-2 py-3 align-top">
+                                        <div className="min-w-0">
+                                            <p className="break-words font-semibold text-[#1A1220]">
+                                                {item.customer}
+                                            </p>
+                                            <p className="mt-0.5 break-words text-[9px] text-[#8C7A95]">
+                                                {item.phone || item.reference}
+                                            </p>
+                                        </div>
+                                    </td>
+
+                                    {showBranchColumn ? (
+                                        <td className="break-words px-2 py-3 align-top text-[#5F5267]">
+                                            {item.branch || "—"}
                                         </td>
-                                        {showBranchColumn ? (
-                                            <td className="break-words px-2 py-3 align-top text-[#5F5267]">
-                                                {item.branch || "—"}
-                                            </td>
-                                        ) : null}
-                                        <td className="px-2 py-3 align-top">
-                                            <p className="font-semibold text-[#1A1220]">{formatDate(item.eventDate)}</p>
-                                            <p className="mt-0.5 text-[9px] text-[#8C7A95]">{item.scheduleTime || "Time not recorded"}</p>
-                                        </td>
-                                        <td className="break-words px-2 py-3 align-top">
-                                            <p className="font-semibold text-[#1A1220]">{item.packageName}</p>
-                                            <p className="mt-0.5 text-[9px] text-[#8C7A95]">{formatPeso(payment.packagePrice)}</p>
-                                        </td>
-                                        <td className="px-2 py-3 align-top">
-                                            <StatusBadge status={payment.paymentStatus} />
-                                            <p className="mt-1 text-[9px] text-[#8C7A95]">Paid {formatPeso(payment.amountPaid)}</p>
-                                        </td>
-                                        <td className="px-2 py-3 text-center align-top">
-                                            <StatusBadge status={getBookingStatusLabel(item)} />
-                                        </td>
-                                        <td className="break-words px-2 py-3 text-right align-top text-[#5F5267]">
-                                            {item.venue || "Venue not recorded"}
-                                        </td>
-                                    </tr>
-                                    {isExpanded ? (
-                                        <tr className="border-b border-[#E6DDF0]">
-                                            <td colSpan={showBranchColumn ? 7 : 6} className="p-0">
-                                                <BookingDetailPanel booking={item} />
-                                            </td>
-                                        </tr>
                                     ) : null}
-                                </Fragment>
+
+                                    <td className="px-2 py-3 align-top">
+                                        <p className="font-semibold text-[#1A1220]">
+                                            {formatDate(item.eventDate)}
+                                        </p>
+                                        <p className="mt-0.5 text-[9px] text-[#8C7A95]">
+                                            {item.scheduleTime || "Time not recorded"}
+                                        </p>
+                                    </td>
+
+                                    <td className="break-words px-2 py-3 align-top">
+                                        <p className="font-semibold text-[#1A1220]">
+                                            {item.packageName}
+                                        </p>
+                                        <p className="mt-0.5 text-[9px] text-[#8C7A95]">
+                                            {formatPeso(payment.packagePrice)}
+                                        </p>
+                                    </td>
+
+                                    <td className="px-2 py-3 align-top">
+                                        <StatusBadge status={payment.paymentStatus} />
+                                        <p className="mt-1 text-[9px] text-[#8C7A95]">
+                                            Paid {formatPeso(payment.amountPaid)}
+                                        </p>
+                                    </td>
+
+                                    <td className="px-2 py-3 text-center align-top">
+                                        <StatusBadge status={getBookingStatusLabel(item)} />
+                                    </td>
+
+                                    <td className="break-words px-2 py-3 text-right align-top text-[#5F5267]">
+                                        {item.venue || "Venue not recorded"}
+                                    </td>
+                                </tr>
                             );
                         })
                     ) : (
                         <tr>
-                            <td colSpan={showBranchColumn ? 7 : 6} className="px-4 py-14 text-center text-sm text-[#8A7A91]">
+                            <td
+                                colSpan={showBranchColumn ? 7 : 6}
+                                className="px-4 py-14 text-center text-sm text-[#8A7A91]"
+                            >
                                 No booking records match the selected filters.
                             </td>
                         </tr>
@@ -3762,6 +3622,115 @@ function BookingReportView({
                             onClick={() => onFilterChange(item.filter)}
                         />
                     ))}
+                </div>
+
+                <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
+                    <h3 className="text-[12px] font-bold text-[#211629]">
+                        Booking Status Breakdown
+                    </h3>
+
+                    <div className="mt-3 flex items-center gap-4">
+                        <div
+                            className="relative h-20 w-20 shrink-0 rounded-full"
+                            style={{
+                                background: (() => {
+                                    const total = Math.max(searchedRecords.length, 1);
+
+                                    const pending = searchedRecords.filter(
+                                        (item) => item.status === "pending"
+                                    ).length;
+
+                                    const confirmed = searchedRecords.filter(
+                                        (item) => item.status === "confirmed"
+                                    ).length;
+
+                                    const preparing = searchedRecords.filter(
+                                        (item) => item.status === "preparing"
+                                    ).length;
+
+                                    const completed = searchedRecords.filter(
+                                        (item) => item.status === "completed"
+                                    ).length;
+
+                                    const pendingEnd = (pending / total) * 100;
+                                    const confirmedEnd =
+                                        ((pending + confirmed) / total) * 100;
+                                    const preparingEnd =
+                                        ((pending + confirmed + preparing) / total) * 100;
+                                    const completedEnd =
+                                        ((pending + confirmed + preparing + completed) / total) * 100;
+
+                                    return `conic-gradient(
+                                        #FF8A00 0% ${pendingEnd}%,
+                                        #7A45E8 ${pendingEnd}% ${confirmedEnd}%,
+                                        #F6A800 ${confirmedEnd}% ${preparingEnd}%,
+                                        #22B65B ${preparingEnd}% ${completedEnd}%,
+                                        #EF3E38 ${completedEnd}% 100%
+                                    )`;
+                                })(),
+                            }}
+                        >
+                            <span className="absolute inset-[14px] rounded-full bg-white" />
+                        </div>
+
+                        <div className="min-w-0 flex-1 space-y-2">
+                            {[
+                                {
+                                    label: "Pending",
+                                    count: searchedRecords.filter(
+                                        (item) => item.status === "pending"
+                                    ).length,
+                                    dot: "bg-[#FF8A00]",
+                                },
+                                {
+                                    label: "Confirmed",
+                                    count: searchedRecords.filter(
+                                        (item) => item.status === "confirmed"
+                                    ).length,
+                                    dot: "bg-[#7A45E8]",
+                                },
+                                {
+                                    label: "Preparing",
+                                    count: searchedRecords.filter(
+                                        (item) => item.status === "preparing"
+                                    ).length,
+                                    dot: "bg-[#F6A800]",
+                                },
+                                {
+                                    label: "Completed",
+                                    count: searchedRecords.filter(
+                                        (item) => item.status === "completed"
+                                    ).length,
+                                    dot: "bg-[#22B65B]",
+                                },
+                                {
+                                    label: "Cancelled",
+                                    count: searchedRecords.filter(
+                                        (item) => item.status === "cancelled"
+                                    ).length,
+                                    dot: "bg-[#EF3E38]",
+                                },
+                            ].map((item) => (
+                                <div
+                                    key={item.label}
+                                    className="flex items-center justify-between gap-2 text-[10px]"
+                                >
+                                    <span className="flex min-w-0 items-center gap-2 text-[#5F5267]">
+                                        <span
+                                            className={`h-2 w-2 shrink-0 rounded-full ${item.dot}`}
+                                        />
+                                        <span className="truncate">
+                                            {item.label}
+                                        </span>
+                                    </span>
+
+                                    <span className="font-bold text-[#251A2C]">
+                                        {formatNumber(item.count)}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 </div>
 
                 <div className="mt-4 border-t border-dashed border-[#E4D9EB] pt-4">
@@ -4098,7 +4067,6 @@ export function ReportsWorkspace({
     const [bookingFilter, setBookingFilter] = useState<BookingFilter>("all");
     const [packageStatusFilter, setPackageStatusFilter] =
         useState<PackageStatusFilter>("all");
-    const [expandedBookingId, setExpandedBookingId] = useState<string | null>(null);
     const [staffModuleFilter, setStaffModuleFilter] =
         useState<StaffModuleFilter>("all");
     const [report, setReport] = useState<ReportData | null>(null);
@@ -5295,11 +5263,9 @@ export function ReportsWorkspace({
         </head>
         <body>
           <h1>${escapeHtml(table.title)}</h1>
-          <p>Store: ${escapeHtml(activeStoreName)}${
-            showBranchColumn
-                ? ` | Branch: ${escapeHtml(activeBranch)}`
-                : ""
-        } | Date range: ${escapeHtml(currentRange)}</p>
+          <p><strong>Store:</strong> ${escapeHtml(activeStoreName)}</p>
+          <p><strong>Branch:</strong> ${escapeHtml(activeBranch || "Assigned Branch")}</p>
+          <p><strong>Date range:</strong> ${escapeHtml(currentRange)}</p>
           <table>
             <thead><tr>${table.headers
             .map((header) => `<th>${escapeHtml(header)}</th>`)
@@ -5324,11 +5290,9 @@ export function ReportsWorkspace({
     ) {
         const worksheet = XLSX.utils.aoa_to_sheet([
             [table.title],
-            [
-                `Store: ${activeStoreName}`,
-                ...(showBranchColumn ? [`Branch: ${activeBranch}`] : []),
-                `Date range: ${currentRange}`,
-            ],
+            [`Store: ${activeStoreName}`],
+            [`Branch: ${activeBranch || "Assigned Branch"}`],
+            [`Date range: ${currentRange}`],
             [],
             table.headers,
             ...table.rows,
@@ -5355,7 +5319,7 @@ export function ReportsWorkspace({
         const pdf = createTablePdf({
             title: table.title,
             storeName: activeStoreName,
-            branch: showBranchColumn ? activeBranch : "",
+            branch: activeBranch || "Assigned Branch",
             dateRange: currentRange,
             headers: table.headers,
             rows: table.rows,
@@ -5414,7 +5378,6 @@ export function ReportsWorkspace({
                                     setSelectedReport(card.key);
                                     setSearchQuery("");
                                     setExpandedInventoryId(null);
-                                    setExpandedBookingId(null);
 
                                     if (card.key === "inventory") {
                                         setInventoryFilter("all");
@@ -5887,12 +5850,6 @@ export function ReportsWorkspace({
                             searchQuery={searchQuery}
                             activeFilter={bookingFilter}
                             onFilterChange={setBookingFilter}
-                            expandedBookingId={expandedBookingId}
-                            onToggleExpanded={(bookingId) =>
-                                setExpandedBookingId((current) =>
-                                    current === bookingId ? null : bookingId
-                                )
-                            }
                             showBranchColumn={showBranchColumn}
                             onExportPdf={() =>
                                 exportPdf(

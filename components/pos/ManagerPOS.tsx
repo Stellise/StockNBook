@@ -69,7 +69,6 @@ export function BranchPOSView({ pos }: { pos: UsePOSReturn }) {
             role={pos.role}
             isOwner={pos.isOwner}
             activeBranchName={pos.activeBranchName}
-            currentMonth={pos.currentMonth}
             onRefresh={() => window.location.reload()}
         >
             <div className="mb-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -515,26 +514,16 @@ function SaleSuccessToast({
     toast: SaleSuccessToastMessage | null;
     onClose: () => void;
 }) {
-    const [isFadingOut, setIsFadingOut] = useState(false);
-
     useEffect(() => {
         if (!toast) {
-            setIsFadingOut(false);
             return;
         }
-
-        setIsFadingOut(false);
-
-        const fadeTimer = window.setTimeout(() => {
-            setIsFadingOut(true);
-        }, 5000);
 
         const closeTimer = window.setTimeout(() => {
             onClose();
         }, 5600);
 
         return () => {
-            window.clearTimeout(fadeTimer);
             window.clearTimeout(closeTimer);
         };
     }, [toast, onClose]);
@@ -547,12 +536,7 @@ function SaleSuccessToast({
         <div
             role="status"
             aria-live="polite"
-            className={[
-                "fixed bottom-5 right-5 z-[140] flex w-[min(360px,calc(100vw-2.5rem))] items-start gap-3 rounded-2xl border border-[#BCE8CA] bg-white p-4 shadow-[0_18px_42px_rgba(43,23,76,0.22)] transition-all duration-700 ease-out",
-                isFadingOut
-                    ? "translate-y-3 opacity-0"
-                    : "translate-y-0 opacity-100",
-            ].join(" ")}
+            className="fixed bottom-5 right-5 z-[140] flex w-[min(360px,calc(100vw-2.5rem))] items-start gap-3 rounded-2xl border border-[#BCE8CA] bg-white p-4 shadow-[0_18px_42px_rgba(43,23,76,0.22)]"
         >
             <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#E5F8EC] text-[#23834A]">
                 <CheckCircle2 size={20} strokeWidth={2.4} />
@@ -620,7 +604,14 @@ function CurrentOrderPanel({ pos }: { pos: UsePOSReturn }) {
             return;
         }
 
-        await Promise.resolve(pos.handlePlaceOrder());
+        const placedSuccessfully =
+            await Promise.resolve(
+                pos.handlePlaceOrder()
+            );
+
+        if (!placedSuccessfully) {
+            return;
+        }
 
         setSuccessToast({
             title: "Order placed successfully",

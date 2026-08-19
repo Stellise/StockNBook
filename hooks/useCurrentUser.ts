@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type CurrentUser = {
     role: "owner" | "manager" | "staff";
@@ -84,13 +84,17 @@ export function useCurrentUser() {
     const [user, setUser] = useState<CurrentUser | null>(() => getSessionUser());
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const requestInFlightRef = useRef(false);
 
     const loadUser = useCallback(async (silent = false) => {
         const cachedUser = getSessionUser();
 
         if (cachedUser) {
             setUser(cachedUser);
-            if (!silent) setLoading(false);
+
+            if (!silent) {
+                setLoading(false);
+            }
         } else if (!silent) {
             setLoading(true);
         }
@@ -100,24 +104,62 @@ export function useCurrentUser() {
         if (!token) {
             setUser(null);
             setError("Missing token");
-            if (!silent) setLoading(false);
+
+            if (!silent) {
+                setLoading(false);
+            }
+
             return;
         }
 
+        /*
+         * Avoid multiple /api/current-user calls running at the same time.
+         * The hook refreshes on an interval and also when the window regains
+         * focus, so without this guard duplicate requests can overlap.
+         */
+        if (requestInFlightRef.current) {
+            return;
+        }
+
+        requestInFlightRef.current = true;
+
         try {
             const res = await fetch("/api/current-user", {
+                method: "GET",
                 headers: {
                     Authorization: `Bearer ${token}`,
+                    Accept: "application/json",
                 },
                 cache: "no-store",
             });
 
-            const data = await res.json();
+            let data: CurrentUser & {
+                error?: string;
+            };
+
+            try {
+                data = await res.json();
+            } catch {
+                throw new Error(
+                    `Current-user API returned an invalid response (${res.status})`
+                );
+            }
 
             if (!res.ok) {
-                setUser(null);
-                setError(data.error || "Failed to load user");
-                if (!silent) setLoading(false);
+                /*
+                 * A real 401/403 means the server rejected the token.
+                 * Other server failures should not erase a valid cached user.
+                 */
+                if (res.status === 401 || res.status === 403) {
+                    setUser(null);
+                    setError(data.error || "Unauthorized");
+                } else {
+                    setError(
+                        data.error ||
+                        `Failed to refresh user (${res.status})`
+                    );
+                }
+
                 return;
             }
 
@@ -125,7 +167,10 @@ export function useCurrentUser() {
 
             setUser((previousUser) => {
                 if (hasUserChanged(previousUser, data)) {
-                    window.dispatchEvent(new Event("stocknbook-current-user-refreshed"));
+                    window.dispatchEvent(
+                        new Event("stocknbook-current-user-refreshed")
+                    );
+
                     return data;
                 }
 
@@ -134,14 +179,34 @@ export function useCurrentUser() {
 
             setError("");
         } catch (err) {
-            console.error("current-user fetch failed:", err);
+            /*
+             * Network errors such as "Failed to fetch" should not wipe out
+             * the cached logged-in user. Keep the cached session so pages
+             * such as Owner POS can continue using the correct account data.
+             */
+            const message =
+                err instanceof Error
+                    ? err.message
+                    : "Failed to load user";
+
+            console.warn(
+                "current-user refresh unavailable:",
+                message
+            );
 
             if (!cachedUser) {
                 setUser(null);
                 setError("Failed to load user");
+            } else {
+                setUser(cachedUser);
+                setError("");
             }
         } finally {
-            if (!silent) setLoading(false);
+            requestInFlightRef.current = false;
+
+            if (!silent) {
+                setLoading(false);
+            }
         }
     }, []);
 

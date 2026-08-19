@@ -7,7 +7,7 @@ const JWT_SECRET = "stocknbook-secret-key";
 const dbConfig = {
     host: "127.0.0.1",
     user: "root",
-    password: "020820@Steph",
+    password: "BTA5EYVWLfWcebF",
     database: "stocknbook",
     ssl: { rejectUnauthorized: false },
 };
@@ -90,7 +90,7 @@ async function ensureBranchBelongsToStore(connection, branchId, storeId) {
          FROM branches
          WHERE id = ?
            AND store_id = ?
-         LIMIT 1`,
+             LIMIT 1`,
         [parsedBranchId, parsedStoreId]
     );
 
@@ -410,6 +410,157 @@ exports.handler = async (event) => {
     try {
         connection = await mysql.createConnection(dbConfig);
 
+        // ── PUBLIC: get_public_packages for customer portal ─────────────
+        // ── PUBLIC: GET PACKAGES FOR CUSTOMER BOOKING PORTAL ─────────────
+        if (action === "get_public_packages") {
+            const publicStoreId = Number(
+                firstDefined(
+                    body.store_id,
+                    body.storeId
+                )
+            );
+
+            const rawBranchId = firstDefined(
+                body.branch_id,
+                body.branchId
+            );
+
+            const publicBranchId =
+                rawBranchId !== undefined &&
+                rawBranchId !== null &&
+                rawBranchId !== ""
+                    ? Number(rawBranchId)
+                    : null;
+
+            console.log(
+                "[PUBLIC PACKAGES] store:",
+                publicStoreId,
+                "branch:",
+                publicBranchId
+            );
+
+            if (
+                !Number.isInteger(publicStoreId) ||
+                publicStoreId <= 0
+            ) {
+                return badRequest(
+                    headers,
+                    "Missing or invalid store_id."
+                );
+            }
+
+            const storeExists =
+                await ensureStoreExists(
+                    connection,
+                    publicStoreId
+                );
+
+            if (!storeExists) {
+                return notFound(
+                    headers,
+                    "Store account not found."
+                );
+            }
+
+            if (publicBranchId) {
+                if (
+                    !Number.isInteger(publicBranchId) ||
+                    publicBranchId <= 0
+                ) {
+                    return badRequest(
+                        headers,
+                        "Invalid branch_id."
+                    );
+                }
+
+                const branchExists =
+                    await ensureBranchBelongsToStore(
+                        connection,
+                        publicBranchId,
+                        publicStoreId
+                    );
+
+                if (!branchExists) {
+                    return notFound(
+                        headers,
+                        "Branch not found for this store."
+                    );
+                }
+            }
+
+            let query = `
+                SELECT *
+                FROM packages
+                WHERE store_id = ?
+                  AND (
+                    status IS NULL
+                        OR TRIM(status) = ''
+                        OR LOWER(TRIM(status)) = 'active'
+                    )
+            `;
+
+            const params = [
+                publicStoreId
+            ];
+
+            if (publicBranchId) {
+                query += `
+            AND branch_id = ?
+        `;
+
+                params.push(
+                    publicBranchId
+                );
+            }
+
+            query += `
+        ORDER BY id DESC
+    `;
+
+            console.log(
+                "[PUBLIC PACKAGES] QUERY:",
+                query
+            );
+
+            console.log(
+                "[PUBLIC PACKAGES] PARAMS:",
+                params
+            );
+
+            const [rows] =
+                await connection.execute(
+                    query,
+                    params
+                );
+
+            console.log(
+                "[PUBLIC PACKAGES] ROW COUNT:",
+                rows.length
+            );
+
+            /*
+             * IMPORTANT:
+             *
+             * Use the SAME normalizer as the authenticated
+             * get_packages action.
+             *
+             * This keeps the public customer response and
+             * internal package response identical.
+             */
+            const packages =
+                rows.map(normalizePackageRow);
+
+            return jsonResponse(
+                200,
+                headers,
+                {
+                    success: true,
+                    packages,
+                    total: packages.length,
+                }
+            );
+        }
+
         const authHeader =
             event?.headers?.authorization ||
             event?.headers?.Authorization ||
@@ -531,7 +682,7 @@ exports.handler = async (event) => {
                  WHERE store_id = ?
                    AND branch_id = ?
                    AND LOWER(TRIM(name)) = LOWER(TRIM(?))
-                 LIMIT 1`,
+                     LIMIT 1`,
                 [storeId, activeBranchId, pkg.name]
             );
 
@@ -547,23 +698,23 @@ exports.handler = async (event) => {
             try {
                 const [result] = await connection.execute(
                     `INSERT INTO packages
-                    (
-                        store_id,
-                        branch_id,
-                        name,
-                        description,
-                        original_value,
-                        discount_type,
-                        discount_value,
-                        package_price,
-                        down_payment_amount,
-                        duration,
-                        status,
-                        category,
-                        cover_image,
-                        inclusions
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                     (
+                         store_id,
+                         branch_id,
+                         name,
+                         description,
+                         original_value,
+                         discount_type,
+                         discount_value,
+                         package_price,
+                         down_payment_amount,
+                         duration,
+                         status,
+                         category,
+                         cover_image,
+                         inclusions
+                     )
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [
                         storeId,
                         activeBranchId,
@@ -636,7 +787,7 @@ exports.handler = async (event) => {
                    AND branch_id = ?
                    AND LOWER(TRIM(name)) = LOWER(TRIM(?))
                    AND id <> ?
-                 LIMIT 1`,
+                     LIMIT 1`,
                 [storeId, branchId, pkg.name, packageId]
             );
 

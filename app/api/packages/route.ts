@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { handler } from "../../../lambda-packages/index.js";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 async function callLocalPackagesLambda(
     body: Record<string, unknown>,
@@ -12,7 +13,11 @@ async function callLocalPackagesLambda(
             "Content-Type": "application/json",
             Authorization: authHeader,
         },
+
         body: JSON.stringify(body),
+
+        httpMethod: "POST",
+
         requestContext: {
             http: {
                 method: "POST",
@@ -25,10 +30,14 @@ async function callLocalPackagesLambda(
     let data: unknown = {};
 
     try {
-        data = response.body ? JSON.parse(response.body) : {};
+        data = response.body
+            ? JSON.parse(response.body)
+            : {};
     } catch {
         data = {
-            error: response.body || "Invalid response from local packages server.",
+            error:
+                response.body ||
+                "Invalid response from local packages server.",
         };
     }
 
@@ -38,72 +47,223 @@ async function callLocalPackagesLambda(
     };
 }
 
+function normalizeAction(value: unknown) {
+    return String(value || "")
+        .trim()
+        .replace(/([a-z])([A-Z])/g, "$1_$2")
+        .replace(/[-\s]+/g, "_")
+        .toLowerCase();
+}
+
 export async function POST(req: NextRequest) {
     try {
-        const body = await req.json();
-        const authHeader = req.headers.get("authorization") || "";
+        const incomingBody = await req.json();
 
-        if (!body || typeof body !== "object") {
+        if (
+            !incomingBody ||
+            typeof incomingBody !== "object"
+        ) {
             return NextResponse.json(
-                { error: "Invalid request body." },
-                { status: 400 }
+                {
+                    error: "Invalid request body.",
+                },
+                {
+                    status: 400,
+                }
             );
         }
 
-        if (!body.action) {
+        if (!incomingBody.action) {
             return NextResponse.json(
-                { error: "Missing package action." },
-                { status: 400 }
+                {
+                    error: "Missing package action.",
+                },
+                {
+                    status: 400,
+                }
             );
         }
 
-        console.log("PACKAGES ROUTE ACTION:", body.action);
-        console.log("PACKAGES ROUTE BODY:", body);
+        const authHeader =
+            req.headers.get("authorization") || "";
 
-        const response = await callLocalPackagesLambda(body, authHeader);
+        const body: Record<string, unknown> = {
+            ...incomingBody,
+        };
 
-        console.log("PACKAGES LOCAL LAMBDA STATUS:", response.status);
-        console.log("PACKAGES LOCAL LAMBDA RESPONSE:", response.data);
+        const requestedAction =
+            normalizeAction(incomingBody.action);
 
-        return NextResponse.json(response.data, { status: response.status });
-    } catch (error) {
-        console.error("PACKAGES ROUTE ERROR:", error);
+        /*
+         * CUSTOMER PORTAL FIX
+         *
+         * The public booking page may still send:
+         *
+         *     action: "get_packages"
+         *
+         * A customer does not have an owner/manager/staff token,
+         * so automatically convert that read-only request to the
+         * public action.
+         */
+        if (
+            !authHeader &&
+            requestedAction === "get_packages"
+        ) {
+            body.action = "get_public_packages";
+        }
+
+        console.log(
+            "PACKAGES ROUTE ORIGINAL ACTION:",
+            incomingBody.action
+        );
+
+        console.log(
+            "PACKAGES ROUTE FINAL ACTION:",
+            body.action
+        );
+
+        console.log(
+            "PACKAGES ROUTE AUTH:",
+            authHeader
+                ? "AUTHENTICATED"
+                : "PUBLIC"
+        );
+
+        console.log(
+            "PACKAGES ROUTE BODY:",
+            body
+        );
+
+        const response =
+            await callLocalPackagesLambda(
+                body,
+                authHeader
+            );
+
+        console.log(
+            "PACKAGES LOCAL LAMBDA STATUS:",
+            response.status
+        );
+
+        console.log(
+            "PACKAGES LOCAL LAMBDA RESPONSE:",
+            response.data
+        );
 
         return NextResponse.json(
-            { error: "Failed to process package request." },
-            { status: 500 }
+            response.data,
+            {
+                status: response.status,
+                headers: {
+                    "Cache-Control":
+                        "no-store, no-cache, must-revalidate",
+                },
+            }
+        );
+    } catch (error) {
+        console.error(
+            "PACKAGES ROUTE ERROR:",
+            error
+        );
+
+        return NextResponse.json(
+            {
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to process package request.",
+            },
+            {
+                status: 500,
+            }
         );
     }
 }
 
 export async function GET(req: NextRequest) {
     try {
-        const { searchParams } = new URL(req.url);
-        const store_id = searchParams.get("store_id") || searchParams.get("storeId");
-        const branch_id = searchParams.get("branch_id") || searchParams.get("branchId");
-        const authHeader = req.headers.get("authorization") || "";
+        const { searchParams } =
+            new URL(req.url);
+
+        const storeId =
+            searchParams.get("store_id") ||
+            searchParams.get("storeId");
+
+        const branchId =
+            searchParams.get("branch_id") ||
+            searchParams.get("branchId");
+
+        const authHeader =
+            req.headers.get("authorization") || "";
 
         const body: Record<string, unknown> = {
-            action: "get_packages",
+            action: authHeader
+                ? "get_packages"
+                : "get_public_packages",
         };
 
-        if (store_id) body.store_id = Number(store_id);
-        if (branch_id) body.branch_id = Number(branch_id);
+        if (storeId) {
+            body.store_id = Number(storeId);
+        }
 
-        console.log("PACKAGES GET BODY:", body);
+        if (branchId) {
+            body.branch_id = Number(branchId);
+        }
 
-        const response = await callLocalPackagesLambda(body, authHeader);
+        console.log(
+            "PACKAGES GET MODE:",
+            authHeader
+                ? "AUTHENTICATED"
+                : "PUBLIC"
+        );
 
-        console.log("PACKAGES GET LOCAL LAMBDA STATUS:", response.status);
-        console.log("PACKAGES GET LOCAL LAMBDA RESPONSE:", response.data);
+        console.log(
+            "PACKAGES GET BODY:",
+            body
+        );
 
-        return NextResponse.json(response.data, { status: response.status });
-    } catch (error) {
-        console.error("PACKAGES GET ROUTE ERROR:", error);
+        const response =
+            await callLocalPackagesLambda(
+                body,
+                authHeader
+            );
+
+        console.log(
+            "PACKAGES GET LOCAL LAMBDA STATUS:",
+            response.status
+        );
+
+        console.log(
+            "PACKAGES GET LOCAL LAMBDA RESPONSE:",
+            response.data
+        );
 
         return NextResponse.json(
-            { error: "Failed to load packages." },
-            { status: 500 }
+            response.data,
+            {
+                status: response.status,
+                headers: {
+                    "Cache-Control":
+                        "no-store, no-cache, must-revalidate",
+                },
+            }
+        );
+    } catch (error) {
+        console.error(
+            "PACKAGES GET ROUTE ERROR:",
+            error
+        );
+
+        return NextResponse.json(
+            {
+                error:
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to load packages.",
+            },
+            {
+                status: 500,
+            }
         );
     }
 }

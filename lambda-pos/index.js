@@ -72,6 +72,84 @@ function toISODate(value) {
     return date.toISOString().slice(0, 10);
 }
 
+
+async function getNextAvailablePosOrderId(
+    connection,
+    storeId,
+    orderDate,
+    requestedOrderId
+) {
+    const requested = toSafeString(requestedOrderId, 255);
+
+    if (!requested) {
+        return "";
+    }
+
+    /*
+     * Frontend IDs normally look like:
+     * HAPPY-POS-20260819-01
+     *
+     * The frontend may only have one branch's orders loaded, while order_id
+     * is the PRIMARY KEY for the entire orders table. Therefore the backend
+     * must choose the final sequence using ALL orders for this store/date.
+     */
+    const sequenceMatch = requested.match(/^(.*)-(\d+)$/);
+
+    const baseId = sequenceMatch
+        ? sequenceMatch[1]
+        : requested;
+
+    const requestedSequence =
+        sequenceMatch && Number.isFinite(Number(sequenceMatch[2]))
+            ? Math.max(1, Number(sequenceMatch[2]))
+            : 1;
+
+    const [rows] = await connection.execute(
+        `SELECT order_id AS orderId
+         FROM orders
+         WHERE store_id = ?
+           AND order_date = ?`,
+        [storeId, orderDate]
+    );
+
+    const escapedBase = baseId.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+    );
+
+    const sequencePattern = new RegExp(
+        `^${escapedBase}-(\\d+)$`,
+        "i"
+    );
+
+    let maxSequence = 0;
+
+    for (const row of rows) {
+        const existingId = String(row.orderId || "").trim();
+        const match = existingId.match(sequencePattern);
+
+        if (!match) {
+            continue;
+        }
+
+        const sequence = Number(match[1]);
+
+        if (
+            Number.isFinite(sequence) &&
+            sequence > maxSequence
+        ) {
+            maxSequence = sequence;
+        }
+    }
+
+    const nextSequence = Math.max(
+        requestedSequence,
+        maxSequence + 1
+    );
+
+    return `${baseId}-${String(nextSequence).padStart(2, "0")}`;
+}
+
 function normalizeAction(value) {
     return toSafeString(value, 80)
         .replace(/([a-z])([A-Z])/g, "$1_$2")
@@ -295,51 +373,112 @@ async function loadOrderItemsForOrders(connection, storeId, orderIds) {
         return new Map();
     }
 
-    const placeholders = safeOrderIds.map(() => "?").join(",");
-    const [rows] = await connection.execute(
-        `SELECT
-             oi.order_id AS orderId,
-             oi.product_id AS productId,
-             oi.variant_id AS variantId,
-             oi.product_name AS name,
-             oi.quantity,
-             oi.unit_price AS unitPrice,
-             oi.line_total AS lineTotal,
-             CASE
-                 WHEN oi.variant_id IS NOT NULL
-                     THEN COALESCE(pv.original_price, p.original_price, 0)
-                 ELSE COALESCE(p.original_price, 0)
-             END AS costPrice
-         FROM order_items oi
-                  LEFT JOIN products p
-                            ON p.id = oi.product_id
-                                AND p.store_id = oi.store_id
-                  LEFT JOIN product_variants pv
-                            ON pv.id = oi.variant_id
-                                AND pv.product_id = oi.product_id
-         WHERE oi.store_id = ?
-           AND oi.order_id IN (${placeholders})
-         ORDER BY oi.order_id ASC, oi.id ASC`,
-        [storeId, ...safeOrderIds]
-    );
-
     const byOrderId = new Map();
 
-    for (const row of rows) {
-        const orderId = String(row.orderId || "");
-        if (!byOrderId.has(orderId)) {
-            byOrderId.set(orderId, []);
-        }
+    /*
+     * IMPORTANT:
+     * Do not send thousands of order IDs in one huge IN (...) query.
+     * MySQL may create large temporary files for that query and can fail
+     * with OS errno 28: "No space left on device".
+     *
+     * Loading the items in small batches keeps the SQL statement and
+     * MySQL temporary-file usage under control while preserving the
+     * exact same result.
+     */
+    const CHUNK_SIZE = 200;
 
-        byOrderId.get(orderId).push({
-            productId: row.productId == null ? null : Number(row.productId),
-            variantId: row.variantId == null ? null : Number(row.variantId),
-            name: String(row.name || ""),
-            quantity: Number(row.quantity || 0),
-            unitPrice: Number(row.unitPrice || 0),
-            lineTotal: Number(row.lineTotal || 0),
-            costPrice: Number(row.costPrice || 0),
-        });
+    for (
+        let start = 0;
+        start < safeOrderIds.length;
+        start += CHUNK_SIZE
+    ) {
+        const chunk = safeOrderIds.slice(
+            start,
+            start + CHUNK_SIZE
+        );
+
+        const placeholders = chunk
+            .map(() => "?")
+            .join(",");
+
+        const [rows] = await connection.execute(
+            `SELECT
+                 oi.order_id AS orderId,
+                 oi.product_id AS productId,
+                 oi.variant_id AS variantId,
+                 oi.product_name AS name,
+                 oi.quantity,
+                 oi.unit_price AS unitPrice,
+                 oi.line_total AS lineTotal,
+                 CASE
+                     WHEN oi.variant_id IS NOT NULL
+                         THEN COALESCE(
+                             pv.original_price,
+                             p.original_price,
+                             0
+                              )
+                     ELSE COALESCE(
+                             p.original_price,
+                             0
+                          )
+                     END AS costPrice
+             FROM order_items oi
+                      LEFT JOIN products p
+                                ON p.id = oi.product_id
+                                    AND p.store_id = oi.store_id
+                      LEFT JOIN product_variants pv
+                                ON pv.id = oi.variant_id
+                                    AND pv.product_id = oi.product_id
+             WHERE oi.store_id = ?
+               AND oi.order_id IN (${placeholders})
+             ORDER BY oi.order_id ASC, oi.id ASC`,
+            [storeId, ...chunk]
+        );
+
+        for (const row of rows) {
+            const orderId = String(
+                row.orderId || ""
+            );
+
+            if (!byOrderId.has(orderId)) {
+                byOrderId.set(
+                    orderId,
+                    []
+                );
+            }
+
+            byOrderId.get(orderId).push({
+                productId:
+                    row.productId == null
+                        ? null
+                        : Number(row.productId),
+
+                variantId:
+                    row.variantId == null
+                        ? null
+                        : Number(row.variantId),
+
+                name: String(
+                    row.name || ""
+                ),
+
+                quantity: Number(
+                    row.quantity || 0
+                ),
+
+                unitPrice: Number(
+                    row.unitPrice || 0
+                ),
+
+                lineTotal: Number(
+                    row.lineTotal || 0
+                ),
+
+                costPrice: Number(
+                    row.costPrice || 0
+                ),
+            });
+        }
     }
 
     return byOrderId;
@@ -555,6 +694,31 @@ exports.handler = async (event) => {
             tokenRole === "manager" ||
             tokenRole === "staff";
 
+        const requestedBranchId =
+            toPositiveInteger(
+                body.branch_id ??
+                body.branchId
+            );
+
+        if (
+            tokenRole === "owner" &&
+            requestedBranchId
+        ) {
+            const ownerBranchExists =
+                await ensureBranchBelongsToStore(
+                    connection,
+                    requestedBranchId,
+                    storeId
+                );
+
+            if (!ownerBranchExists) {
+                return badRequest(
+                    headers,
+                    "Invalid branch for this store."
+                );
+            }
+        }
+
         if (isBranchUser) {
             if (
                 !Number.isInteger(tokenBranchId) ||
@@ -582,7 +746,7 @@ exports.handler = async (event) => {
         }
 
         if (action === "create_order") {
-            const orderId =
+            const requestedOrderId =
                 toSafeString(
                     body.order_id,
                     255
@@ -606,7 +770,7 @@ exports.handler = async (event) => {
             const orderLines =
                 getOrderLines(body);
 
-            if (!orderId) {
+            if (!requestedOrderId) {
                 return badRequest(
                     headers,
                     "order_id is required."
@@ -634,116 +798,162 @@ exports.handler = async (event) => {
                     255
                 );
 
-            await connection.beginTransaction();
+            let orderId =
+                await getNextAvailablePosOrderId(
+                    connection,
+                    storeId,
+                    orderDate,
+                    requestedOrderId
+                );
 
-            try {
-                await connection.execute(
-                    `INSERT INTO orders
-                     (
-                         order_id,
-                         store_id,
-                         branch_id,
-                         item,
-                         total,
-                         order_date
-                     )
-                     VALUES (?, ?, ?, ?, ?, ?)`,
-                    [
+            const MAX_ORDER_ID_ATTEMPTS = 5;
+
+            for (
+                let attempt = 0;
+                attempt < MAX_ORDER_ID_ATTEMPTS;
+                attempt += 1
+            ) {
+                await connection.beginTransaction();
+
+                try {
+                    await connection.execute(
+                        `INSERT INTO orders
+                         (
+                             order_id,
+                             store_id,
+                             branch_id,
+                             item,
+                             total,
+                             order_date
+                         )
+                         VALUES (?, ?, ?, ?, ?, ?)`,
+                        [
+                            orderId,
+                            storeId,
+                            tokenBranchId,
+                            item,
+                            total,
+                            orderDate,
+                        ]
+                    );
+
+                    await insertOrderItems(
+                        connection,
                         orderId,
                         storeId,
                         tokenBranchId,
-                        item,
-                        total,
-                        orderDate,
-                    ]
-                );
-
-                await insertOrderItems(
-                    connection,
-                    orderId,
-                    storeId,
-                    tokenBranchId,
-                    orderLines
-                );
-
-                await decreaseStockForOrder(
-                    connection,
-                    storeId,
-                    tokenBranchId,
-                    orderLines
-                );
-
-                await connection.commit();
-
-                const [rows] =
-                    await connection.execute(
-                        `SELECT
-                             o.order_id AS orderId,
-                             o.store_id AS storeId,
-                             o.branch_id AS branchId,
-
-                             COALESCE(
-                                     NULLIF(
-                                             TRIM(b.branch_name),
-                                             ''
-                                     ),
-                                     CONCAT(
-                                             'Branch ',
-                                             o.branch_id
-                                     ),
-                                     'Unassigned'
-                             ) AS branchName,
-
-                             COALESCE(
-                                     NULLIF(
-                                             TRIM(b.branch_name),
-                                             ''
-                                     ),
-                                     CONCAT(
-                                             'Branch ',
-                                             o.branch_id
-                                     ),
-                                     'Unassigned'
-                             ) AS branch,
-
-                             o.item,
-                             o.total,
-                             DATE_FORMAT(o.order_date, '%Y-%m-%d') AS orderDate,
-                             o.created_at AS createdAt
-
-                         FROM orders o
-
-                                  LEFT JOIN branches b
-                                            ON b.id = o.branch_id
-                                                AND b.store_id = o.store_id
-
-                         WHERE o.order_id = ?
-
-                             LIMIT 1`,
-                        [orderId]
+                        orderLines
                     );
 
-                const orderItemsById = await loadOrderItemsForOrders(
-                    connection,
-                    storeId,
-                    [orderId]
-                );
+                    await decreaseStockForOrder(
+                        connection,
+                        storeId,
+                        tokenBranchId,
+                        orderLines
+                    );
 
-                return jsonResponse(
-                    201,
-                    headers,
-                    {
-                        success: true,
-                        order: {
-                            ...rows[0],
-                            orderItems: orderItemsById.get(String(orderId)) || [],
-                        },
+                    await connection.commit();
+
+                    const [rows] =
+                        await connection.execute(
+                            `SELECT
+                                 o.order_id AS orderId,
+                                 o.store_id AS storeId,
+                                 o.branch_id AS branchId,
+
+                                 COALESCE(
+                                         NULLIF(
+                                                 TRIM(b.branch_name),
+                                                 ''
+                                         ),
+                                         CONCAT(
+                                                 'Branch ',
+                                                 o.branch_id
+                                         ),
+                                         'Unassigned'
+                                 ) AS branchName,
+
+                                 COALESCE(
+                                         NULLIF(
+                                                 TRIM(b.branch_name),
+                                                 ''
+                                         ),
+                                         CONCAT(
+                                                 'Branch ',
+                                                 o.branch_id
+                                         ),
+                                         'Unassigned'
+                                 ) AS branch,
+
+                                 o.item,
+                                 o.total,
+                                 DATE_FORMAT(o.order_date, '%Y-%m-%d') AS orderDate,
+                                 o.created_at AS createdAt
+
+                             FROM orders o
+
+                                      LEFT JOIN branches b
+                                                ON b.id = o.branch_id
+                                                    AND b.store_id = o.store_id
+
+                             WHERE o.order_id = ?
+
+                                 LIMIT 1`,
+                            [orderId]
+                        );
+
+                    const orderItemsById =
+                        await loadOrderItemsForOrders(
+                            connection,
+                            storeId,
+                            [orderId]
+                        );
+
+                    return jsonResponse(
+                        201,
+                        headers,
+                        {
+                            success: true,
+                            order: {
+                                ...rows[0],
+                                orderItems:
+                                    orderItemsById.get(
+                                        String(orderId)
+                                    ) || [],
+                            },
+                        }
+                    );
+                } catch (error) {
+                    await connection.rollback();
+
+                    /*
+                     * Two branches/staff users can submit at almost the same
+                     * moment. If that happens, recalculate the next sequence
+                     * and retry rather than returning ER_DUP_ENTRY.
+                     */
+                    if (
+                        error?.code === "ER_DUP_ENTRY" &&
+                        attempt <
+                        MAX_ORDER_ID_ATTEMPTS - 1
+                    ) {
+                        orderId =
+                            await getNextAvailablePosOrderId(
+                                connection,
+                                storeId,
+                                orderDate,
+                                requestedOrderId
+                            );
+
+                        continue;
                     }
-                );
-            } catch (error) {
-                await connection.rollback();
-                throw error;
+
+                    throw error;
+                }
             }
+
+            throw new Error(
+                "Unable to generate a unique POS order ID."
+            );
         }
 
         if (action === "decrease_stock") {
@@ -790,6 +1000,31 @@ exports.handler = async (event) => {
         }
 
         if (action === "get_orders") {
+            const requestedDateFrom = toISODate(
+                body.date_from ??
+                body.dateFrom ??
+                body.start_date ??
+                body.startDate
+            );
+
+            const requestedDateTo = toISODate(
+                body.date_to ??
+                body.dateTo ??
+                body.end_date ??
+                body.endDate
+            );
+
+            if (
+                requestedDateFrom &&
+                requestedDateTo &&
+                requestedDateFrom > requestedDateTo
+            ) {
+                return badRequest(
+                    headers,
+                    "date_from cannot be later than date_to."
+                );
+            }
+
             let query = `
                 SELECT
                     o.order_id AS orderId,
@@ -822,6 +1057,54 @@ exports.handler = async (event) => {
 
                     o.item,
                     o.total,
+
+                    /*
+                     * Calculate cost from the exact products/variants that
+                     * belong to each order item. This avoids frontend
+                     * product-name matching and keeps branch profit accurate.
+                     *
+                     * If an older order has no order_items rows, fall back to
+                     * its sales total so the profit is safely reported as 0.
+                     */
+                    COALESCE(
+                            SUM(
+                                    CASE
+                                        WHEN oi.id IS NULL THEN NULL
+                                        ELSE
+                                            COALESCE(
+                                                    CASE
+                                                        WHEN oi.variant_id IS NOT NULL
+                                                            THEN pv.original_price
+                                                        ELSE p.original_price
+                                                        END,
+                                                    0
+                                            ) * COALESCE(oi.quantity, 0)
+                                        END
+                            ),
+                            o.total
+                    ) AS totalCost,
+
+                    (
+                        o.total -
+                        COALESCE(
+                                SUM(
+                                        CASE
+                                            WHEN oi.id IS NULL THEN NULL
+                                            ELSE
+                                                COALESCE(
+                                                        CASE
+                                                            WHEN oi.variant_id IS NOT NULL
+                                                                THEN pv.original_price
+                                                            ELSE p.original_price
+                                                            END,
+                                                        0
+                                                ) * COALESCE(oi.quantity, 0)
+                                            END
+                                ),
+                                o.total
+                        )
+                        ) AS profit,
+
                     DATE_FORMAT(o.order_date, '%Y-%m-%d') AS orderDate,
                     o.created_at AS createdAt
 
@@ -830,6 +1113,18 @@ exports.handler = async (event) => {
                          LEFT JOIN branches b
                                    ON b.id = o.branch_id
                                        AND b.store_id = o.store_id
+
+                         LEFT JOIN order_items oi
+                                   ON oi.order_id = o.order_id
+                                       AND oi.store_id = o.store_id
+
+                         LEFT JOIN products p
+                                   ON p.id = oi.product_id
+                                       AND p.store_id = oi.store_id
+
+                         LEFT JOIN product_variants pv
+                                   ON pv.id = oi.variant_id
+                                       AND pv.product_id = oi.product_id
 
                 WHERE o.store_id = ?
             `;
@@ -844,10 +1139,38 @@ exports.handler = async (event) => {
                     " AND o.branch_id = ?";
 
                 params.push(tokenBranchId);
+            } else if (
+                tokenRole === "owner" &&
+                requestedBranchId
+            ) {
+                query +=
+                    " AND o.branch_id = ?";
+
+                params.push(requestedBranchId);
             }
 
-            query +=
-                " ORDER BY o.created_at DESC, o.order_id DESC";
+            if (requestedDateFrom) {
+                query += " AND o.order_date >= ?";
+                params.push(requestedDateFrom);
+            }
+
+            if (requestedDateTo) {
+                query += " AND o.order_date <= ?";
+                params.push(requestedDateTo);
+            }
+
+            query += `
+                GROUP BY
+                    o.order_id,
+                    o.store_id,
+                    o.branch_id,
+                    b.branch_name,
+                    o.item,
+                    o.total,
+                    o.order_date,
+                    o.created_at
+                ORDER BY o.created_at DESC, o.order_id DESC
+            `;
 
             const [rows] =
                 await connection.execute(
@@ -855,16 +1178,31 @@ exports.handler = async (event) => {
                     params
                 );
 
-            const orderItemsById = await loadOrderItemsForOrders(
-                connection,
-                storeId,
-                rows.map((row) => row.orderId)
-            );
+            /*
+             * The POS screens use o.item for their order rows and totals.
+             * Loading every order_items row for every order made the Owner
+             * view extremely slow when a store had thousands of orders.
+             * Detailed order items are now loaded only when explicitly asked.
+             */
+            const includeOrderItems =
+                body.include_order_items === true ||
+                body.includeOrderItems === true;
 
-            const orders = rows.map((row) => ({
-                ...row,
-                orderItems: orderItemsById.get(String(row.orderId)) || [],
-            }));
+            let orders = rows;
+
+            if (includeOrderItems && rows.length > 0) {
+                const orderItemsById = await loadOrderItemsForOrders(
+                    connection,
+                    storeId,
+                    rows.map((row) => row.orderId)
+                );
+
+                orders = rows.map((row) => ({
+                    ...row,
+                    orderItems:
+                        orderItemsById.get(String(row.orderId)) || [],
+                }));
+            }
 
             return jsonResponse(
                 200,
