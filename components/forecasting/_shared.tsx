@@ -1724,9 +1724,9 @@ function InventoryForecastPanel({
                 </div>
 
                 {demandItems.length > 0 ? (
-                    <div className="overflow-x-auto">
+                    <div className="max-h-[420px] overflow-auto">
                         <table className="w-full min-w-[1120px] border-collapse">
-                            <thead className="bg-[#FFFCF7]">
+                            <thead className="sticky top-0 z-10 bg-[#FFFCF7]">
                             <tr className="border-b border-[#E6DDF0]">
                                 <ForecastTableHeader>Product</ForecastTableHeader>
                                 <ForecastTableHeader>Demand Level</ForecastTableHeader>

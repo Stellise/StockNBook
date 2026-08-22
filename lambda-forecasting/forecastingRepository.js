@@ -378,7 +378,10 @@ async function getHistoricalSales(
             oi.variant_id,
             SUM(oi.quantity) AS quantity,
             DATE_FORMAT(
-                    DATE_SUB(DATE(o.order_date), INTERVAL WEEKDAY(o.order_date) DAY),
+                    DATE_SUB(
+                            DATE(o.order_date),
+                INTERVAL WEEKDAY(DATE(o.order_date)) DAY
+            ),
                     '%Y-%m-%d'
             ) AS order_date
         FROM orders o
@@ -386,7 +389,7 @@ async function getHistoricalSales(
                             ON oi.order_id = o.order_id
         WHERE o.store_id = ?
           AND oi.product_id IS NOT NULL
-          AND o.order_date BETWEEN ? AND ?
+          AND DATE(o.order_date) BETWEEN ? AND ?
     `;
 
     const params = [storeId, startDate, endDate];
@@ -397,13 +400,18 @@ async function getHistoricalSales(
     }
 
     query += `
-        GROUP BY
-            oi.product_id,
-            oi.variant_id,
-            DATE_SUB(DATE(o.order_date), INTERVAL WEEKDAY(o.order_date) DAY)
-        ORDER BY order_date ASC
-    `;
-
+    GROUP BY
+        oi.product_id,
+        oi.variant_id,
+        DATE_FORMAT(
+            DATE_SUB(
+                DATE(o.order_date),
+                INTERVAL WEEKDAY(DATE(o.order_date)) DAY
+            ),
+            '%Y-%m-%d'
+        )
+    ORDER BY order_date ASC
+`;
     const [rows] = await connection.execute(query, params);
 
     return rows.map((row) => ({
