@@ -485,18 +485,22 @@ export default function SetupScreen() {
                                                     </div>
 
                                                     <div className="border-t border-[#E8DFF0] pt-5">
-                                                        <div className="flex items-center gap-2">
-                                                            <Mail className="h-4 w-4 text-[#6F45B8]" />
-                                                            <h4 className="font-semibold text-[#2D1B4E]">
-                                                                Branch manager
-                                                            </h4>
-                                                        </div>
+                                                        <div className="rounded-2xl border border-[#E8DFF0] bg-[#FCFAFD] p-5 sm:p-6">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#EEE8F8] text-[#6F45B8]">
+                                                                    <Mail className="h-5 w-5" />
+                                                                </div>
 
-                                                        <p className="mt-1 text-xs leading-5 text-[#7A6E88]">
-                                                            Leave both fields empty if
-                                                            you will manage this branch
-                                                            yourself.
-                                                        </p>
+                                                                <div>
+                                                                    <h4 className="font-semibold text-[#2D1B4E]">
+                                                                        Branch manager details
+                                                                    </h4>
+                                                                    <p className="mt-1 text-sm text-[#7A6E88]">
+                                                                        Add the person assigned to manage this branch.
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        </div>
 
                                                         <div className="mt-4 grid gap-4 sm:grid-cols-2">
                                                             <TextInput

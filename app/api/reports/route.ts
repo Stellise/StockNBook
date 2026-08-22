@@ -166,7 +166,7 @@ async function loadStoreName(
         `SELECT store_name
          FROM stores
          WHERE id = ?
-         LIMIT 1`,
+             LIMIT 1`,
         [storeId]
     );
 
@@ -444,6 +444,7 @@ async function loadSales(
             o.branch_id,
             br.branch_name,
             o.customer_name,
+            o.cashier_name,
             DATE_FORMAT(o.order_date, '%Y-%m-%d') AS order_date,
             COALESCE(o.total, 0) AS total,
             COALESCE(SUM(oi.quantity), 0) AS total_quantity,
@@ -481,6 +482,7 @@ async function loadSales(
             o.branch_id,
             br.branch_name,
             o.customer_name,
+            o.cashier_name,
             o.order_date,
             o.total
         ORDER BY o.order_date DESC, o.order_id DESC
@@ -502,6 +504,7 @@ async function loadSales(
         amount: asNumber(row.total),
         revenueSource: "pos",
         statusLabel: "Completed",
+        cashier: asText(row.cashier_name) || undefined,
     }));
 }
 
@@ -538,7 +541,8 @@ async function loadBookings(
             b.payment_status,
             b.required_down_payment,
             b.amount_paid,
-            b.balance
+            b.balance,
+            b.created_by_name
         FROM bookings b
                  LEFT JOIN branches br
                            ON br.id = b.branch_id AND br.store_id = b.store_id
@@ -589,6 +593,7 @@ async function loadBookings(
             balance: asNumber(row.balance),
             paymentStatus: asText(row.payment_status) || "unpaid",
             notes: asText(row.notes) || undefined,
+            createdBy: asText(row.created_by_name) || undefined,
         };
     });
 }

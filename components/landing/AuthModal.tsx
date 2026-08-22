@@ -27,7 +27,6 @@ import {
     Store,
     Trash2,
     UserRound,
-    Users,
     X,
 } from "lucide-react";
 
@@ -124,7 +123,7 @@ const createEmptyBranch = (): BranchSetup => ({
     address: "",
     manager_name: "",
     manager_email: "",
-    manager_mode: "owner",
+    manager_mode: "invite",
     permissions: { ...defaultPermissions },
 });
 
@@ -542,23 +541,6 @@ export default function AuthModal({
         );
     };
 
-    const updateManagerMode = (index: number, modeValue: ManagerMode) => {
-        setBranches((current) =>
-            current.map((branch, branchIndex) =>
-                branchIndex === index
-                    ? {
-                        ...branch,
-                        manager_mode: modeValue,
-                        manager_name:
-                            modeValue === "owner" ? "" : branch.manager_name,
-                        manager_email:
-                            modeValue === "owner" ? "" : branch.manager_email,
-                    }
-                    : branch
-            )
-        );
-    };
-
     const updatePermission = (
         index: number,
         permission: keyof Permissions,
@@ -602,8 +584,7 @@ export default function AuthModal({
     const continueToReview = () => {
         const incompleteManagerIndex = branches.findIndex(
             (branch) =>
-                branch.manager_mode === "invite" &&
-                (!branch.manager_name.trim() || !branch.manager_email.trim())
+                !branch.manager_name.trim() || !branch.manager_email.trim()
         );
 
         if (incompleteManagerIndex >= 0) {
@@ -631,14 +612,8 @@ export default function AuthModal({
             branch_name: branch.branch_name.trim(),
             contact_number: branch.contact_number.trim(),
             address: branch.address.trim(),
-            manager_name:
-                branch.manager_mode === "invite"
-                    ? branch.manager_name.trim()
-                    : "",
-            manager_email:
-                branch.manager_mode === "invite"
-                    ? branch.manager_email.trim()
-                    : "",
+            manager_name: branch.manager_name.trim(),
+            manager_email: branch.manager_email.trim(),
             permissions: branch.permissions,
         }));
 
@@ -1320,146 +1295,79 @@ export default function AuthModal({
                                             </p>
                                         </div>
 
-                                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    updateManagerMode(
-                                                        index,
-                                                        "owner"
-                                                    )
-                                                }
-                                                className={[
-                                                    "rounded-xl border p-4 text-left transition",
-                                                    branch.manager_mode === "owner"
-                                                        ? "border-[#6D42A5] bg-[#F8F3FF] ring-2 ring-[#6D42A5]/10"
-                                                        : "border-[#E3DBE8] bg-white hover:border-[#BFAED0]",
-                                                ].join(" ")}
-                                            >
-                                                <div className="flex items-start gap-3">
-                                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F0E8FA] text-[#5B35A5]">
-                                                        <UserRound className="h-4 w-4" />
-                                                    </span>
-                                                    <div>
-                                                        <p className="text-sm font-semibold text-[#1A1220]">
-                                                            I will manage this
-                                                            branch
-                                                        </p>
-                                                        <p className="mt-1 text-xs leading-5 text-[#7A6E88]">
-                                                            The owner keeps full
-                                                            access to this branch.
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </button>
+                                        <div className="mt-5">
+                                            <div className="grid gap-4 sm:grid-cols-2">
+                                                <TextInput
+                                                    label="Manager name"
+                                                    placeholder="e.g. Ana Cruz"
+                                                    value={branch.manager_name}
+                                                    onChange={(value) =>
+                                                        updateBranch(
+                                                            index,
+                                                            "manager_name",
+                                                            value
+                                                        )
+                                                    }
+                                                    icon={
+                                                        <UserRound className="h-4 w-4 text-[#7A6E88]" />
+                                                    }
+                                                />
 
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    updateManagerMode(
-                                                        index,
-                                                        "invite"
-                                                    )
-                                                }
-                                                className={[
-                                                    "rounded-xl border p-4 text-left transition",
-                                                    branch.manager_mode === "invite"
-                                                        ? "border-[#6D42A5] bg-[#F8F3FF] ring-2 ring-[#6D42A5]/10"
-                                                        : "border-[#E3DBE8] bg-white hover:border-[#BFAED0]",
-                                                ].join(" ")}
-                                            >
-                                                <div className="flex items-start gap-3">
-                                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F0E8FA] text-[#5B35A5]">
-                                                        <Users className="h-4 w-4" />
-                                                    </span>
-                                                    <div>
-                                                        <p className="text-sm font-semibold text-[#1A1220]">
-                                                            Invite a branch manager
-                                                        </p>
-                                                        <p className="mt-1 text-xs leading-5 text-[#7A6E88]">
-                                                            Keep the existing
-                                                            invitation-link flow.
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </button>
-                                        </div>
+                                                <TextInput
+                                                    label="Manager email"
+                                                    placeholder="manager@email.com"
+                                                    type="email"
+                                                    value={branch.manager_email}
+                                                    onChange={(value) =>
+                                                        updateBranch(
+                                                            index,
+                                                            "manager_email",
+                                                            value
+                                                        )
+                                                    }
+                                                    icon={
+                                                        <Mail className="h-4 w-4 text-[#7A6E88]" />
+                                                    }
+                                                />
+                                            </div>
 
-                                        {branch.manager_mode === "invite" && (
-                                            <div className="mt-5">
-                                                <div className="grid gap-4 sm:grid-cols-2">
-                                                    <TextInput
-                                                        label="Manager name"
-                                                        placeholder="e.g. Ana Cruz"
-                                                        value={branch.manager_name}
-                                                        onChange={(value) =>
-                                                            updateBranch(
-                                                                index,
-                                                                "manager_name",
-                                                                value
-                                                            )
-                                                        }
-                                                        icon={
-                                                            <UserRound className="h-4 w-4 text-[#7A6E88]" />
-                                                        }
-                                                    />
+                                            <div className="mt-1">
+                                                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[#7A6E88]">
+                                                    Access level
+                                                </p>
 
-                                                    <TextInput
-                                                        label="Manager email"
-                                                        placeholder="manager@email.com"
-                                                        type="email"
-                                                        value={branch.manager_email}
-                                                        onChange={(value) =>
-                                                            updateBranch(
-                                                                index,
-                                                                "manager_email",
-                                                                value
-                                                            )
-                                                        }
-                                                        icon={
-                                                            <Mail className="h-4 w-4 text-[#7A6E88]" />
-                                                        }
-                                                    />
-                                                </div>
-
-                                                <div className="mt-1">
-                                                    <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[#7A6E88]">
-                                                        Access level
-                                                    </p>
-
-                                                    <div className="grid gap-2 sm:grid-cols-2">
-                                                        {permissionLabels.map(
-                                                            (permission) => (
-                                                                <AccessToggle
-                                                                    key={
-                                                                        permission.key
-                                                                    }
-                                                                    label={
-                                                                        permission.label
-                                                                    }
-                                                                    checked={
-                                                                        branch
-                                                                            .permissions[
-                                                                            permission
-                                                                                .key
-                                                                            ]
-                                                                    }
-                                                                    onChange={(
+                                                <div className="grid gap-2 sm:grid-cols-2">
+                                                    {permissionLabels.map(
+                                                        (permission) => (
+                                                            <AccessToggle
+                                                                key={
+                                                                    permission.key
+                                                                }
+                                                                label={
+                                                                    permission.label
+                                                                }
+                                                                checked={
+                                                                    branch
+                                                                        .permissions[
+                                                                        permission
+                                                                            .key
+                                                                        ]
+                                                                }
+                                                                onChange={(
+                                                                    checked
+                                                                ) =>
+                                                                    updatePermission(
+                                                                        index,
+                                                                        permission.key,
                                                                         checked
-                                                                    ) =>
-                                                                        updatePermission(
-                                                                            index,
-                                                                            permission.key,
-                                                                            checked
-                                                                        )
-                                                                    }
-                                                                />
-                                                            )
-                                                        )}
-                                                    </div>
+                                                                    )
+                                                                }
+                                                            />
+                                                        )
+                                                    )}
                                                 </div>
                                             </div>
-                                        )}
+                                        </div>
                                     </div>
                                 ))}
 
@@ -1578,56 +1486,46 @@ export default function AuthModal({
                                                             </div>
 
                                                             <div className="sm:min-w-[170px]">
-                                                                {branch.manager_mode ===
-                                                                "owner" ? (
-                                                                    <span className="inline-flex rounded-full bg-[#EEF7E9] px-3 py-1 text-xs font-semibold text-[#466436]">
-                                                                        Managed by
-                                                                        owner
-                                                                    </span>
-                                                                ) : (
-                                                                    <>
-                                                                        <p className="text-xs font-semibold text-[#1A1220]">
-                                                                            {
-                                                                                branch.manager_name
-                                                                            }
-                                                                        </p>
-                                                                        <p className="mt-1 break-all text-xs text-[#7A6E88]">
-                                                                            {
-                                                                                branch.manager_email
-                                                                            }
-                                                                        </p>
-                                                                        <div className="mt-3">
-                                                                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7A6E88]">
-                                                                                Enabled features
-                                                                            </p>
+                                                                <p className="text-xs font-semibold text-[#1A1220]">
+                                                                    {
+                                                                        branch.manager_name
+                                                                    }
+                                                                </p>
+                                                                <p className="mt-1 break-all text-xs text-[#7A6E88]">
+                                                                    {
+                                                                        branch.manager_email
+                                                                    }
+                                                                </p>
+                                                                <div className="mt-3">
+                                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#7A6E88]">
+                                                                        Enabled features
+                                                                    </p>
 
-                                                                            <div className="mt-2 flex max-w-[280px] flex-wrap gap-1.5">
-                                                                                {enabledPermissions.map(
-                                                                                    (
-                                                                                        permission
-                                                                                    ) => (
-                                                                                        <span
-                                                                                            key={
-                                                                                                permission.key
-                                                                                            }
-                                                                                            className="inline-flex items-center gap-1 rounded-full bg-[#F0E8FA] px-2.5 py-1 text-[11px] font-semibold text-[#5B35A5]"
-                                                                                        >
-                                                                                            <Check className="h-3 w-3" />
-                                                                                            {
-                                                                                                permission.label
-                                                                                            }
-                                                                                        </span>
-                                                                                    )
-                                                                                )}
-                                                                            </div>
+                                                                    <div className="mt-2 flex max-w-[280px] flex-wrap gap-1.5">
+                                                                        {enabledPermissions.map(
+                                                                            (
+                                                                                permission
+                                                                            ) => (
+                                                                                <span
+                                                                                    key={
+                                                                                        permission.key
+                                                                                    }
+                                                                                    className="inline-flex items-center gap-1 rounded-full bg-[#F0E8FA] px-2.5 py-1 text-[11px] font-semibold text-[#5B35A5]"
+                                                                                >
+                                                                                    <Check className="h-3 w-3" />
+                                                                                    {
+                                                                                        permission.label
+                                                                                    }
+                                                                                </span>
+                                                                            )
+                                                                        )}
+                                                                    </div>
 
-                                                                            <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-4 text-[#6F6577]">
-                                                                                <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#6F45B8]" />
-                                                                                The manager invitation link will be emailed automatically after setup.
-                                                                            </p>
-                                                                        </div>
-                                                                    </>
-                                                                )}
+                                                                    <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-4 text-[#6F6577]">
+                                                                        <Mail className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#6F45B8]" />
+                                                                        The manager invitation link will be emailed automatically after setup.
+                                                                    </p>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -2396,7 +2294,6 @@ function SignupOtpDialog({
         </div>
     );
 }
-
 
 function TextInput({
                        label,
